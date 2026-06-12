@@ -25,6 +25,7 @@ const DOWN = "#ef5350"
 const PIVOT_HIGH = "#f0a431"
 const PIVOT_LOW = "#42a5f5"
 const REVERSE = "#f0a431"
+const LIQ = "#e040fb"
 const ENTRY_LINE = "#b2b5be"
 const LOAD_MORE_THRESHOLD = 50
 
@@ -73,7 +74,8 @@ function pivotMarkers(sim: PivotSimResult, cutoff: number): SeriesMarker<Time>[]
       })
     }
     if (t.exitTime !== null && t.exitReason !== "open" && t.exitTime <= cutoff) {
-      const color = t.exitReason === "tp" ? UP : t.exitReason === "sl" ? DOWN : REVERSE
+      const color =
+        t.exitReason === "tp" ? UP : t.exitReason === "sl" ? DOWN : t.exitReason === "liq" ? LIQ : REVERSE
       out.push({
         time: t.exitTime as UTCTimestamp,
         position: t.side === "long" ? "aboveBar" : "belowBar",
@@ -412,6 +414,8 @@ export default function ChartView({
     add(open.entryPrice, ENTRY_LINE, `Entry ${open.side}`)
     add(open.slPrice, DOWN, "SL")
     add(open.tpPrice, UP, "TP")
+    // At ×1 the liq price is effectively unreachable (~0 / ~2× entry) — noise on the scale.
+    if (session.pivotSim.leverage > 1) add(open.liqPrice, LIQ, "Liq")
   }, [session])
 
   // Backtest range highlight (live + session).

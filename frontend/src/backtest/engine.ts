@@ -147,7 +147,7 @@ export class BacktestEngine {
 
   private runSimulate(candles: Candle[]): Promise<PivotSimResult> {
     const cfg = this.config!
-    const p = this.pivotParams ?? { tpSlRatio: 2, slCapPct: 4, quoteAmount: 100 }
+    const p = this.pivotParams ?? { tpSlRatio: 2, slCapPct: 4, quoteAmount: 100, leverage: 1 }
     return bot.simulate(candles, this.pivotOptions, {
       ...p,
       feesEnabled: cfg.feesEnabled,

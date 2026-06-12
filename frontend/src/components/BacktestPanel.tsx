@@ -26,6 +26,12 @@ const INTERVAL_SEC: Record<string, number> = {
 const endsNearNow = (interval: string, end: number) =>
   Date.now() / 1000 - end < 2 * (INTERVAL_SEC[interval] ?? 3600)
 
+const LEVERAGE_STEPS = [1, 2, 3, 5, 10, 20, 25, 50, 75, 100, 125]
+const leverageIndex = (lev: number) => {
+  const i = LEVERAGE_STEPS.indexOf(lev)
+  return i >= 0 ? i : 0
+}
+
 export interface PanelConfig {
   mode: "replay" | "headless"
   algo: "dca" | "pivot"
@@ -37,6 +43,7 @@ export interface PanelConfig {
   tpSlRatio: number
   slCapPct: number
   positionSize: number
+  leverage: number
 }
 
 interface Props {
@@ -124,6 +131,7 @@ export default function BacktestPanel(p: Props) {
   const pClosed = sim ? sim.trades.filter(t => t.exitTime !== null && t.exitTime <= cursorT) : []
   const pRealized = pClosed.reduce((a, t) => a + (t.pnl ?? 0), 0)
   const pWins = pClosed.filter(t => (t.pnl ?? 0) >= 0).length
+  const pLiqs = pClosed.filter(t => t.exitReason === "liq").length
   const pOpen = sim?.trades.find(t => t.entryTime <= cursorT && (t.exitTime === null || t.exitTime > cursorT))
   const pUnreal =
     pOpen && last ? (pOpen.side === "long" ? 1 : -1) * pOpen.qty * (last.close - pOpen.entryPrice) : null
@@ -169,7 +177,7 @@ export default function BacktestPanel(p: Props) {
       ) : (
         <>
           <label className="field">
-            Position size (USDT)
+            Margin per position (USDT)
             <input
               type="number"
               min={1}
@@ -179,6 +187,18 @@ export default function BacktestPanel(p: Props) {
             />
           </label>
           {/* Live-tunable during a pivot replay — re-runs the sim. */}
+          <label className="field">
+            Leverage ×{config.leverage} — notional {fmtUsd(config.positionSize * config.leverage)} USDT
+            <input
+              type="range"
+              min={0}
+              max={LEVERAGE_STEPS.length - 1}
+              step={1}
+              value={leverageIndex(config.leverage)}
+              disabled={pivotsLocked}
+              onChange={e => set({ leverage: LEVERAGE_STEPS[Number(e.target.value)] })}
+            />
+          </label>
           <label className="field">
             TP/SL ratio (e.g. 2 = TP is 2× the SL)
             <input
@@ -366,6 +386,8 @@ export default function BacktestPanel(p: Props) {
         <div className="results">
           <h4>Pivot results {snap.status === "finished" ? "(final)" : "(running)"}</h4>
           <dl>
+            <dt>Leverage</dt>
+            <dd>×{sim.leverage}</dd>
             <dt>Position</dt>
             <dd>{pOpen ? `${pOpen.side} @ ${fmtUsd(pOpen.entryPrice)}` : "flat"}</dd>
             <dt>Last price</dt><dd>{last ? fmtUsd(last.close) : "—"}</dd>
@@ -379,8 +401,15 @@ export default function BacktestPanel(p: Props) {
             <dt>ROI</dt>
             <dd className={pRoi < 0 ? "neg" : "pos"}>{pRoi.toFixed(2)} %</dd>
             <dt>Closed trades</dt>
-            <dd>{pClosed.length}{pClosed.length > 0 ? ` · ${pWins}W/${pClosed.length - pWins}L` : ""}</dd>
+            <dd>
+              {pClosed.length}
+              {pClosed.length > 0 ? ` · ${pWins}W/${pClosed.length - pWins}L` : ""}
+              {pLiqs > 0 ? ` · ${pLiqs} liq` : ""}
+            </dd>
           </dl>
+          {pEquity < config.positionSize && (
+            <div className="panel-error">Bust — equity can no longer fund the margin, no further entries.</div>
+          )}
         </div>
       )}
 
