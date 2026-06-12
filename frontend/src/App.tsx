@@ -139,6 +139,7 @@ export default function App() {
             symbol={market.symbol}
             interval={interval}
             session={showSession}
+            pivotOptions={pivotOptions.options}
             rangeSelection={{ start: rangeStart, end: rangeEnd }}
             onChartClick={onChartClick}
             onChartContextMenu={(time, x, y, candle) => {

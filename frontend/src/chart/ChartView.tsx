@@ -12,7 +12,7 @@ import {
   type UTCTimestamp,
 } from "lightweight-charts"
 import { fetchKlines, KLINE_LIMIT, type Candle } from "../binance/api"
-import type { Pivot, Trade } from "../api/backend"
+import { bot, type Pivot, type PivotOptions, type Trade } from "../api/backend"
 import { RangeHighlight, type RangeSelection } from "./RangeHighlight"
 
 const UP = "#26a69a"
@@ -34,6 +34,7 @@ interface Props {
   symbol: string
   interval: string
   session: SessionView | null
+  pivotOptions: PivotOptions
   rangeSelection: RangeSelection
   onChartClick?: (time: number) => void
   onChartContextMenu?: (time: number | null, x: number, y: number, candle: Candle | null) => void
@@ -67,6 +68,7 @@ export default function ChartView({
   symbol,
   interval,
   session,
+  pivotOptions,
   rangeSelection,
   onChartClick,
   onChartContextMenu,
@@ -91,6 +93,8 @@ export default function ChartView({
   const [error, setError] = useState<string | null>(null)
   const [hovered, setHovered] = useState<Candle | null>(null)
   const [retryKey, setRetryKey] = useState(0)
+  const [liveCandles, setLiveCandles] = useState<Candle[]>([])
+  const [livePivots, setLivePivots] = useState<Pivot[]>([])
 
   const sessionActive = session !== null
   sessionActiveRef.current = sessionActive
@@ -164,24 +168,18 @@ export default function ChartView({
     }
   }, [])
 
-  // Live mode: initial fetch + lazy older-history loading. Paused while a session renders.
+  // Live mode: initial fetch + lazy older-history loading. Paused while a session
+  // renders. Data lands in liveCandles state; the render effect below draws it.
   useEffect(() => {
     const chart = chartRef.current
     const candleSeries = candleSeriesRef.current
-    const volumeSeries = volumeSeriesRef.current
-    if (!chart || !candleSeries || !volumeSeries || sessionActive) return
+    if (!chart || !candleSeries || sessionActive) return
 
     let disposed = false
     let loadingOlder = false
     let exhausted = false
     setLoading(true)
     setError(null)
-
-    const setAll = (candles: Candle[]) => {
-      candlesRef.current = candles
-      candleSeries.setData(candles.map(c => toSeriesCandle(c)))
-      volumeSeries.setData(candles.map(toVolumeBar))
-    }
 
     const loadOlder = async () => {
       const candles = candlesRef.current
@@ -191,7 +189,7 @@ export default function ChartView({
         const older = await fetchKlines(symbol, interval, candles[0].time * 1000 - 1)
         if (disposed) return
         if (older.length < KLINE_LIMIT) exhausted = true
-        if (older.length > 0) setAll([...older, ...candlesRef.current])
+        if (older.length > 0) setLiveCandles(prev => [...older, ...prev])
       } catch {
         // transient — retried on the next range change
       } finally {
@@ -210,7 +208,7 @@ export default function ChartView({
     fetchKlines(symbol, interval)
       .then(initial => {
         if (disposed) return
-        setAll(initial)
+        setLiveCandles(initial)
         if (initial.length < KLINE_LIMIT) exhausted = true
         setHovered(initial.length > 0 ? initial[initial.length - 1] : null)
         setLoading(false)
@@ -226,6 +224,41 @@ export default function ChartView({
       chart.timeScale().unsubscribeVisibleLogicalRangeChange(onRange)
     }
   }, [symbol, interval, retryKey, sessionActive])
+
+  // Live pivots, indicator-style: recompute over everything drawn whenever more
+  // history loads or the options change. Stateless bot call — no session needed.
+  useEffect(() => {
+    if (sessionActive || !pivotOptions.enabled || liveCandles.length === 0) {
+      setLivePivots([])
+      return
+    }
+    let stale = false
+    bot
+      .analyze(liveCandles, pivotOptions)
+      .then(r => {
+        if (!stale) setLivePivots(r.pivots ?? [])
+      })
+      .catch(() => {
+        // bot unreachable — chart stays usable, pivots just don't show
+        if (!stale) setLivePivots([])
+      })
+    return () => {
+      stale = true
+    }
+  }, [liveCandles, pivotOptions, sessionActive])
+
+  // Live render: candles + volume, pivot candles painted in the pivot colors.
+  useEffect(() => {
+    const candleSeries = candleSeriesRef.current
+    const volumeSeries = volumeSeriesRef.current
+    if (!candleSeries || !volumeSeries || sessionActive) return
+    const colors = new Map(
+      livePivots.map(pv => [pv.time, pv.type === "high" ? PIVOT_HIGH : PIVOT_LOW] as [number, string]),
+    )
+    candlesRef.current = liveCandles
+    candleSeries.setData(liveCandles.map(c => toSeriesCandle(c, colors.get(c.time))))
+    volumeSeries.setData(liveCandles.map(toVolumeBar))
+  }, [liveCandles, livePivots, sessionActive])
 
   // Session mode: pre-start history as context + range candles up to `upTo`;
   // incremental update when stepping forward, full setData on jumps.
@@ -287,7 +320,14 @@ export default function ChartView({
     const markers = markersRef.current
     if (!markers) return
     if (!session) {
-      markers.setMarkers([])
+      markers.setMarkers(
+        livePivots.map(pv => ({
+          time: pv.time as UTCTimestamp,
+          position: pv.type === "high" ? "aboveBar" : "belowBar",
+          color: pv.type === "high" ? PIVOT_HIGH : PIVOT_LOW,
+          shape: pv.type === "high" ? "arrowDown" : "arrowUp",
+        })),
+      )
       return
     }
     const cutoff = session.upTo > 0 ? session.candles[session.upTo - 1].time : 0
@@ -309,7 +349,7 @@ export default function ChartView({
         shape: pv.type === "high" ? "arrowDown" : "arrowUp",
       }))
     markers.setMarkers([...trades, ...pivots].sort((a, b) => (a.time as number) - (b.time as number)))
-  }, [session])
+  }, [session, livePivots])
 
   // Backtest range highlight (live + session).
   useEffect(() => {
