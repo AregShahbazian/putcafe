@@ -1,0 +1,13 @@
+# Putcafe site — imported by /root/orion/Caddyfile (the shared edge Caddy) via
+# `import /root/*/site.caddy` (or a putcafe-specific line added by setup.sh).
+# ORION_HOST comes from /root/orion/orion-web.env via the orion-web systemd unit,
+# so the host tracks the edge automatically: putcafe.203-0-113-10.sslip.io.
+#
+#   /web/[<slot>/]  -> web builds (rsynced by ci.yml / deploy.sh)
+#   /               -> redirect to /web/
+
+putcafe.{$ORION_HOST} {
+	root * /root/putcafe/site
+	file_server
+	redir / /web/ 302
+}

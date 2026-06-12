@@ -1,0 +1,8 @@
+# First-run credentials for setup.sh / ops.sh (before the CI key exists).
+# Copy to deploy.conf (gitignored) and fill in. After the first setup.sh run the
+# scripts switch to key auth (.secrets/) and the password is no longer used.
+
+SERVER_IP="x.x.x.x"
+SERVER_USER="root"
+SERVER_PASSWORD="..."
+SERVER_SSH_PORT="22"

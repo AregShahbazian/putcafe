@@ -1,0 +1,111 @@
+# Putcafe CI — build and deploy the frontend to the shared VPS edge.
+#
+# Deploy targets (one Caddy serves /root/putcafe/site over HTTPS — see
+# scripts/dev/remote/edge/):
+#   Prod:    push a version tag `v*`          -> /web/          (GATED)
+#   Staging: push to `main`                   -> /web/staging/
+#   Preview: push to `feature/**` or `dev/**` -> /web/<slot>/   (`feature/` stripped)
+#
+# The prod job declares `environment: production` — GitHub's required-reviewer gate,
+# created by scripts/dev/local/edge/setup-github.sh. Approve the run in the repo UI.
+#
+# Required GitHub config (set by setup-github.sh):
+#   Secret    VPS_SSH_KEY   private half of the putcafe_ci deploy key
+#   Variables VPS_HOST / VPS_USER / VPS_PORT
+
+name: ci
+
+on:
+  push:
+    branches:
+      - main
+      - 'feature/**'
+      - 'dev/**'
+    tags:
+      - 'v*'
+  workflow_dispatch: {}
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # --- Build + deploy: branch (staging + previews, auto) ----------------------
+  web:
+    if: github.ref_type == 'branch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: yarn
+          cache-dependency-path: frontend/yarn.lock
+
+      - name: Compute deploy slot
+        id: slot
+        # main -> the reserved `staging` slot; feature/** is stripped, dev/** keeps
+        # its path. Slot leaves are isolated, so they mirror with --delete (only the
+        # prod root job must NOT --delete — it would wipe sibling slots).
+        run: |
+          ref="${GITHUB_REF#refs/heads/}"
+          if [ "$ref" = "main" ]; then slot="staging"; else slot="${ref#feature/}"; fi
+          echo "dir=/root/putcafe/site/web/$slot" >> "$GITHUB_OUTPUT"
+
+      - name: Build frontend
+        # vite base is relative ("./"), so one build serves at any slot depth.
+        run: |
+          cd frontend
+          yarn --frozen-lockfile
+          yarn build
+
+      - name: Set up SSH
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -p "${{ vars.VPS_PORT }}" -H "${{ vars.VPS_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Deploy → VPS
+        run: |
+          ssh -p "${{ vars.VPS_PORT }}" "${{ vars.VPS_USER }}@${{ vars.VPS_HOST }}" \
+            'mkdir -p ${{ steps.slot.outputs.dir }}'
+          rsync -az --delete -e "ssh -p ${{ vars.VPS_PORT }}" \
+            frontend/dist/ "${{ vars.VPS_USER }}@${{ vars.VPS_HOST }}:${{ steps.slot.outputs.dir }}/"
+
+  # --- Build + deploy: prod (tag, GATED) --------------------------------------
+  web-prod:
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: yarn
+          cache-dependency-path: frontend/yarn.lock
+
+      - name: Build frontend
+        run: |
+          cd frontend
+          yarn --frozen-lockfile
+          yarn build
+
+      - name: Set up SSH
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -p "${{ vars.VPS_PORT }}" -H "${{ vars.VPS_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Deploy → VPS prod root
+        # The root must NOT use --delete: it would wipe the sibling staging/preview
+        # slot dirs that live under site/web/.
+        run: |
+          ssh -p "${{ vars.VPS_PORT }}" "${{ vars.VPS_USER }}@${{ vars.VPS_HOST }}" \
+            'mkdir -p /root/putcafe/site/web'
+          rsync -az -e "ssh -p ${{ vars.VPS_PORT }}" \
+            frontend/dist/ "${{ vars.VPS_USER }}@${{ vars.VPS_HOST }}:/root/putcafe/site/web/"
