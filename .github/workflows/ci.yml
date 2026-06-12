@@ -1,10 +1,15 @@
-# Putcafe CI — build and deploy the frontend to the shared VPS edge.
+# Putcafe CI — build and deploy frontend + backend to the shared VPS edge.
+#
+# Monorepo, path-filtered: the `changes` job detects which top-level area moved,
+# and each deploy job runs only when its own files changed (frontend/** -> web,
+# backend/** -> api), so a frontend-only push never rebuilds the API and vice versa.
 #
 # Deploy targets (one Caddy serves /root/putcafe/site over HTTPS — see
 # scripts/dev/remote/edge/):
-#   Prod:    push a version tag `v*`          -> /web/          (GATED)
-#   Staging: push to `main`                   -> /web/staging/
-#   Preview: push to `feature/**` or `dev/**` -> /web/<slot>/   (`feature/` stripped)
+#   web    Prod:    push a version tag `v*`          -> /web/          (GATED)
+#          Staging: push to `main`                   -> /web/staging/
+#          Preview: push to `feature/**` or `dev/**` -> /web/<slot>/   (`feature/` stripped)
+#   api    push to `main`                            -> /root/putcafe/api (compose up --build)
 #
 # The prod job declares `environment: production` — GitHub's required-reviewer gate,
 # created by scripts/dev/local/edge/setup-github.sh. Approve the run in the repo UI.
@@ -30,9 +35,27 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # --- Detect which areas changed (path filter) -------------------------------
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      frontend: ${{ steps.filter.outputs.frontend }}
+      backend: ${{ steps.filter.outputs.backend }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            frontend:
+              - 'frontend/**'
+            backend:
+              - 'backend/**'
+
   # --- Build + deploy: branch (staging + previews, auto) ----------------------
   web:
-    if: github.ref_type == 'branch'
+    needs: changes
+    if: github.ref_type == 'branch' && needs.changes.outputs.frontend == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -110,9 +133,10 @@ jobs:
           rsync -az -e "ssh -p ${{ vars.VPS_PORT }}" \
             frontend/dist/ "${{ vars.VPS_USER }}@${{ vars.VPS_HOST }}:/root/putcafe/site/web/"
 
-  # --- Deploy API stack (main only; idempotent, Docker layer cache on the box) -
+  # --- Deploy API stack (main + backend changes; Docker layer cache on the box) -
   api:
-    if: github.ref == 'refs/heads/main'
+    needs: changes
+    if: github.ref == 'refs/heads/main' && needs.changes.outputs.backend == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
