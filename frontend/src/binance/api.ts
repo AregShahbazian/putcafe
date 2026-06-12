@@ -79,6 +79,26 @@ export async function fetchKlinesRange(
   return out
 }
 
+/** Available history bounds (unix seconds, candle open-times) for a
+ * market+interval: the first listed candle and the last *closed* one. Used to
+ * bound a random backtest range. */
+export async function fetchKlineBounds(
+  symbol: string,
+  interval: string,
+): Promise<{ earliest: number; latest: number }> {
+  // Earliest: Binance returns the first listed candle when startTime=0.
+  const params = new URLSearchParams({ symbol, interval, startTime: "0", limit: "1" })
+  const res = await fetch(`${BASE}/api/v3/klines?${params}`)
+  if (!res.ok) throw new Error(`klines failed: ${res.status}`)
+  const first: Kline[] = await res.json()
+  // Latest: the most-recent page's last element is the still-forming candle;
+  // the one before it is the last fully closed candle (reproducible).
+  const recent = await fetchKlines(symbol, interval)
+  if (first.length === 0 || recent.length < 2)
+    throw new Error(`not enough klines for ${symbol} ${interval} to pick a range`)
+  return { earliest: Math.floor(first[0][0] / 1000), latest: recent[recent.length - 2].time }
+}
+
 export async function fetchKlines(
   symbol: string,
   interval: string,

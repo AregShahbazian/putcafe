@@ -63,6 +63,8 @@ export interface AppHandle {
   stopSession(): Promise<void>
   loadPreset(name: string): void
   loadSession(id: string): void
+  /** Roll a random backtest range into the UI; resolves to the chosen pair. */
+  randomRange(opts?: { minBars?: number; maxBars?: number }): Promise<{ start: number; end: number }>
 }
 
 export interface RenderedMarker {
@@ -565,6 +567,7 @@ const COMMANDS: [string, string][] = [
   ["pc.session.stop()", "finish the active session, back to idle"],
   ["pc.session.loadPreset(name)", "load a saved preset into the UI (does not start it)"],
   ["pc.session.loadSession(id)", "load a persisted backend session onto the chart"],
+  ["pc.backtest.randomRange({minBars?, maxBars?})", "roll a random start/end window from the current market's history into the UI range"],
   ["pc.play() / pc.pause() / pc.stepForward() / pc.stepBack() / pc.restart()", "playback controls; each resolves once the engine reflects it"],
   ["pc.setSpeed(cps) / pc.setAutoResume(bool)", "playback tuning"],
   ["pc.playTo(time, {timeoutMs?})", "play and pause when the cursor reaches that candle (≥100 cps may overshoot)"],
@@ -622,6 +625,17 @@ function buildPc() {
           opts.timeoutMs ?? 60_000,
         )
       }),
+    },
+
+    backtest: {
+      randomRange: cmd(
+        "backtest.randomRange",
+        async (opts: { minBars?: number; maxBars?: number } = {}) => {
+          const rolled = await requireApp().randomRange(opts)
+          const ui = requireApp().getUi()
+          return { ...rolled, market: ui.market.symbol, interval: ui.interval }
+        },
+      ),
     },
 
     play: cmd("play", play),
