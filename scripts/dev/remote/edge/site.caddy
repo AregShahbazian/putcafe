@@ -7,6 +7,10 @@
 #   /api/positions/*  -> positions-backend container (127.0.0.1:8101)
 #   /api/bot/*        -> bot-backend container       (127.0.0.1:8102)
 #   /                 -> redirect to /web/
+#
+# ops.<host> is the VPS-wide ops UI (Dozzle, all containers on the box, port 8103);
+# auth is handled by Dozzle itself (users.yml on the VPS), so this file stays
+# secret-free.
 
 putcafe.{$ORION_HOST} {
 	root * /root/putcafe/site
@@ -14,4 +18,8 @@ putcafe.{$ORION_HOST} {
 	reverse_proxy /api/bot/* 127.0.0.1:8102
 	file_server
 	redir / /web/ 302
+}
+
+ops.{$ORION_HOST} {
+	reverse_proxy 127.0.0.1:8103
 }

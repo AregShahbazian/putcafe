@@ -19,6 +19,7 @@ case "$cmd" in
     echo "import wired: $( (grep -qxF 'import /root/*/site.caddy' /root/orion/Caddyfile || grep -qxF 'import /root/putcafe/site.caddy' /root/orion/Caddyfile) 2>/dev/null && echo yes || echo NO)"
     echo "site tree:"
     find /root/putcafe/site -maxdepth 3 -name index.html 2>/dev/null | sed 's/^/  /' || true
+    echo "ops-ui (dozzle): $(docker ps --filter name=ops-ui-dozzle --format '{{.Status}}' 2>/dev/null | grep . || echo 'not running')"
     ;;
   start|stop|restart)
     echo "WARNING: orion-web is shared with Orion — '$cmd' affects Orion too." >&2
@@ -37,6 +38,9 @@ case "$cmd" in
       printf '%-15s ' "$p"
       curl -sI --max-time 10 "https://putcafe.$h$p" | head -n1 || echo "FAILED"
     done
+    printf '%-15s ' "ops UI"
+    curl -sLo /dev/null -w 'HTTP %{http_code} (login page)\n' --max-time 10 \
+      "https://ops.$h/" || echo "FAILED"
     ;;
   *)
     echo "usage: ops.sh <status|start|stop|restart|reload|logs|health>" >&2

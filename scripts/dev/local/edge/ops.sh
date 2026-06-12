@@ -25,6 +25,9 @@ if [ "$cmd" = "health" ]; then
     printf '%-15s ' "$p"
     curl -sI --max-time 10 "https://$host$p" | head -n1 || echo "FAILED"
   done
+  printf '%-15s ' "ops UI"
+  curl -sLo /dev/null -w 'HTTP %{http_code} (login page)\n' --max-time 10 \
+    "https://ops.${CONN_IP//./-}.sslip.io/" || echo "FAILED"
   exit 0
 fi
 

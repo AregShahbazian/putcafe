@@ -1,0 +1,21 @@
+# VPS ops UI (Dozzle) — runs on the VPS at /root/putcafe/ops-ui (provisioned by
+# scripts/dev/local/edge/setup-ops-ui.sh). Binds 127.0.0.1 only; the shared Caddy
+# serves it at https://ops.<host>/. Sees ALL containers on the box (docker socket);
+# login required (simple auth, users.yml generated on the box — never in git).
+services:
+  dozzle:
+    image: amir20/dozzle:v8
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./data:/data
+    ports:
+      - "127.0.0.1:8103:8080"
+    environment:
+      DOZZLE_AUTH_PROVIDER: simple
+      DOZZLE_ENABLE_ACTIONS: "true"
+    healthcheck:
+      test: ["CMD", "/dozzle", "healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
