@@ -2,8 +2,8 @@
 
 Trades the swing structure from `pivots.detect`: a stop-market breakout of the
 most recent pivot in the breakout direction opens a position (long on up-break,
-short on down-break); a TP/SL bracket sized off the opposite pivot (capped) is
-set at entry; breaking the *current* opposite pivot closes-and-reverses; after a
+short on down-break); a TP/SL bracket — SL a fixed % from entry, TP = SL%·ratio —
+is set at entry; breaking the *current* opposite pivot closes-and-reverses; after a
 TP/SL exit no re-entry until a fresh pivot confirms. One netted position at a
 time. Intra-candle ordering uses the OHLC color heuristic (green O->L->H->C,
 red O->H->L->C). Mirrors the positions-backend fee model so numbers line up.
@@ -17,9 +17,8 @@ TAKER_FEE = 0.001
 SLIPPAGE = 0.0005
 
 
-def _bracket(side: str, entry: float, opp: float | None, sl_cap: float, ratio: float):
-    """SL% = capped distance to the opposite pivot (fallback to the cap); TP% = SL%·ratio."""
-    sl_pct = sl_cap if opp is None else min(abs(entry - opp) / entry, sl_cap)
+def _bracket(side: str, entry: float, sl_pct: float, ratio: float):
+    """SL leads: fixed distance from entry. TP follows: SL%·ratio."""
     tp_pct = sl_pct * ratio
     if side == "long":
         return entry * (1 - sl_pct), entry * (1 + tp_pct)
@@ -37,7 +36,7 @@ def simulate(candles: list[dict], pivot_options, params) -> dict:
     detected = pivots.detect(candles, lookback, alternation=True)
 
     ratio = float(params.tpSlRatio)
-    sl_cap = float(params.slCapPct) / 100.0
+    sl_pct = float(params.slCapPct) / 100.0
     notional = float(params.quoteAmount)
     fees = bool(params.feesEnabled)
     equity = float(params.startingBalance)
@@ -67,9 +66,7 @@ def simulate(candles: list[dict], pivot_options, params) -> dict:
         # Gap-aware stop fill: a candle opening past the stop fills at the open.
         raw = max(level, candle["open"]) if buy else min(level, candle["open"])
         entry = fill(raw, buy)
-        opp = (last_low["price"] if side == "long" else last_high["price"]) \
-            if (last_low if side == "long" else last_high) else None
-        sl_price, tp_price = _bracket(side, entry, opp, sl_cap, ratio)
+        sl_price, tp_price = _bracket(side, entry, sl_pct, ratio)
         qty = notional / entry
         pos = {
             "side": side, "entryTime": candle["time"], "entryPrice": entry,

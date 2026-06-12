@@ -191,7 +191,7 @@ export default function BacktestPanel(p: Props) {
             />
           </label>
           <label className="field">
-            SL cap (%) — max stop distance
+            SL (%) — stop distance from entry
             <input
               type="number"
               min={0.1}
