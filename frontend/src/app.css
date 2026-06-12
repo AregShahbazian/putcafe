@@ -418,6 +418,46 @@ button {
   color: #787b86;
 }
 
+/* Presets */
+
+.preset-row {
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
+}
+
+.preset-load {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  background: #1e222d;
+  border: 1px solid #2a2e39;
+  border-radius: 4px;
+  padding: 6px 8px;
+  font-size: 12px;
+}
+
+.preset-load:hover {
+  background: #2a2e39;
+}
+
+.preset-remove {
+  background: none;
+  border: none;
+  color: #787b86;
+  padding: 0 6px;
+}
+
+.preset-remove:hover {
+  color: #ef5350;
+}
+
+.preset-warn {
+  color: #f0a431;
+}
+
 /* Playback strip */
 
 .playback-strip {

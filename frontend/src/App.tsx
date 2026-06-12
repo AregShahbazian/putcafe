@@ -10,16 +10,21 @@ import PlaybackControls from "./components/PlaybackControls"
 import ChartContextMenu, { type ContextMenuState } from "./components/ChartContextMenu"
 import { useSavedCandles } from "./util/savedCandles"
 import { usePivotOptions } from "./util/pivotOptions"
+import { usePresets, type Preset } from "./util/presets"
 import type { PivotOptions } from "./api/backend"
 
 const DEFAULT_MARKET: Market = { symbol: "BTCUSDT", baseAsset: "BTC", quoteAsset: "USDT" }
 
 const DEFAULT_CONFIG: PanelConfig = {
-  mode: "replay",
+  mode: "headless",
+  algo: "dca",
   quoteAmount: 10,
   frequencySec: 7 * 86400,
   startingBalance: 1000,
   feesEnabled: true,
+  tpSlRatio: 2,
+  slCapPct: 4,
+  positionSize: 100,
 }
 
 export default function App() {
@@ -28,7 +33,7 @@ export default function App() {
   const [market, setMarket] = useState<Market>(DEFAULT_MARKET)
   const [interval, setInterval] = useState<Interval>("1h")
 
-  const [panelOpen, setPanelOpen] = useState(false)
+  const [panelOpen, setPanelOpen] = useState(true)
   const [config, setConfig] = useState<PanelConfig>(DEFAULT_CONFIG)
   const [rangeStart, setRangeStart] = useState<number | undefined>()
   const [rangeEnd, setRangeEnd] = useState<number | undefined>()
@@ -36,6 +41,7 @@ export default function App() {
   const [ctxMenu, setCtxMenu] = useState<ContextMenuState | null>(null)
   const savedCandles = useSavedCandles()
   const pivotOptions = usePivotOptions()
+  const presets = usePresets()
 
   const engineRef = useRef<BacktestEngine | null>(null)
   const [snap, setSnap] = useState<EngineSnapshot | null>(null)
@@ -63,10 +69,20 @@ export default function App() {
   }, [market.symbol, interval, engine])
 
   // The engine mirrors the persisted pivot options; mid-replay changes go to the
-  // bot as a live control (it recomputes and returns updated pivots).
+  // bot as a live control (it recomputes and returns updated pivots, or — for the
+  // pivot algo — re-runs the whole strategy sim).
   useEffect(() => {
     void engine.setPivotOptions(pivotOptions.options)
   }, [pivotOptions.options, engine])
+
+  // Pivot-strategy params: live control during a pivot replay (re-runs the sim).
+  useEffect(() => {
+    void engine.setPivotParams({
+      tpSlRatio: config.tpSlRatio,
+      slCapPct: config.slCapPct,
+      quoteAmount: config.positionSize,
+    })
+  }, [config.tpSlRatio, config.slCapPct, config.positionSize, engine])
 
   // Escape cancels candle picking.
   useEffect(() => {
@@ -85,12 +101,36 @@ export default function App() {
       startTime: start,
       endTime: end,
       mode,
-      algo: "dca",
+      algo: config.algo,
       algoConfig: { quoteAmount: config.quoteAmount, frequencySec: config.frequencySec },
+      pivotParams:
+        config.algo === "pivot"
+          ? { tpSlRatio: config.tpSlRatio, slCapPct: config.slCapPct, quoteAmount: config.positionSize }
+          : undefined,
       startingBalance: config.startingBalance,
       feesEnabled: config.feesEnabled,
     }
     void engine.start(sessionConfig)
+  }
+
+  const savePreset = (name: string) => {
+    if (rangeStart === undefined || rangeEnd === undefined) return
+    presets.save({ name, market, interval, rangeStart, rangeEnd, config, pivotOptions: pivotOptions.options })
+  }
+
+  const loadPreset = (p: Preset) => {
+    if (engine.snapshot.status !== "idle") void engine.stop()
+    // Pre-sync the market/interval key so the change effect below doesn't wipe
+    // the range we're about to set from the preset.
+    prevKeyRef.current = `${p.market.symbol}-${p.interval}`
+    setMarket(p.market)
+    setInterval(p.interval)
+    setConfig(p.config)
+    setRangeStart(p.rangeStart)
+    setRangeEnd(p.rangeEnd)
+    pivotOptions.set(p.pivotOptions)
+    setPicking(null)
+    setPanelOpen(true)
   }
 
   const onChartClick = (time: number) => {
@@ -102,14 +142,17 @@ export default function App() {
 
   const replayActive =
     s.mode === "replay" && ["ready", "playing", "paused", "finished"].includes(s.status)
+  // Pivot sims have no positions-backend session, so they're carried by pivotSim.
+  const hasRun = s.session !== null || s.pivotSim !== null
   const showSession: SessionView | null =
-    s.session && (replayActive || (s.mode === "headless" && s.status === "finished"))
+    hasRun && (replayActive || (s.mode === "headless" && s.status === "finished"))
       ? {
           candles: s.candles,
           preCandles: s.preCandles,
           upTo: s.upTo,
           trades: s.trades,
           pivots: s.pivots,
+          pivotSim: s.pivotSim,
           fitRange: s.mode === "headless" && s.status === "finished",
         }
       : null
@@ -172,6 +215,10 @@ export default function App() {
             onClearSaved={savedCandles.clear}
             pivotOptions={pivotOptions.options}
             onPivotOptions={(patch: Partial<PivotOptions>) => pivotOptions.set(patch)}
+            presets={presets.presets}
+            onSavePreset={savePreset}
+            onLoadPreset={loadPreset}
+            onRemovePreset={presets.remove}
             rangeStart={rangeStart}
             rangeEnd={rangeEnd}
             picking={picking}

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react"
 import { positions, type PivotOptions, type Session } from "../api/backend"
+import type { Preset } from "../util/presets"
 import type { EngineSnapshot } from "../backtest/engine"
 import { fetchKlinesRange } from "../binance/api"
 import { downloadJson, fileStamp } from "../util/download"
@@ -14,12 +15,28 @@ const FREQUENCIES: Array<{ label: string; sec: number }> = [
   { label: "Every 2 weeks", sec: 14 * 86400 },
 ]
 
+const INTERVAL_SEC: Record<string, number> = {
+  "1m": 60, "3m": 180, "5m": 300, "15m": 900, "30m": 1800,
+  "1h": 3600, "2h": 7200, "4h": 14400, "6h": 21600, "12h": 43200,
+  "1d": 86400, "3d": 259200, "1w": 604800,
+}
+
+// A preset whose end is within ~2 candles of now may include a still-forming
+// candle → its run isn't reproducible.
+const endsNearNow = (interval: string, end: number) =>
+  Date.now() / 1000 - end < 2 * (INTERVAL_SEC[interval] ?? 3600)
+
 export interface PanelConfig {
   mode: "replay" | "headless"
+  algo: "dca" | "pivot"
   quoteAmount: number
   frequencySec: number
   startingBalance: number
   feesEnabled: boolean
+  // Pivot-breakout strategy params (used when algo === "pivot").
+  tpSlRatio: number
+  slCapPct: number
+  positionSize: number
 }
 
 interface Props {
@@ -40,6 +57,10 @@ interface Props {
   onClearSaved: () => void
   pivotOptions: PivotOptions
   onPivotOptions: (patch: Partial<PivotOptions>) => void
+  presets: Preset[]
+  onSavePreset: (name: string) => void
+  onLoadPreset: (preset: Preset) => void
+  onRemovePreset: (name: string) => void
 }
 
 const fmtDate = (t?: number) =>
@@ -97,38 +118,91 @@ export default function BacktestPanel(p: Props) {
   const unrealized = s && last && s.avgEntry !== null ? s.baseQty * (last.close - s.avgEntry) : null
   const roi = s && equity !== null ? ((equity - s.startingBalance) / s.startingBalance) * 100 : null
 
+  // Pivot-algo running stats, clipped to the cursor so replay doesn't spoil the result.
+  const cursorT = last ? last.time : 0
+  const sim = snap.pivotSim
+  const pClosed = sim ? sim.trades.filter(t => t.exitTime !== null && t.exitTime <= cursorT) : []
+  const pRealized = pClosed.reduce((a, t) => a + (t.pnl ?? 0), 0)
+  const pWins = pClosed.filter(t => (t.pnl ?? 0) >= 0).length
+  const pOpen = sim?.trades.find(t => t.entryTime <= cursorT && (t.exitTime === null || t.exitTime > cursorT))
+  const pUnreal =
+    pOpen && last ? (pOpen.side === "long" ? 1 : -1) * pOpen.qty * (last.close - pOpen.entryPrice) : null
+  const pEquity = config.startingBalance + pRealized
+  const pRoi = (pRealized / config.startingBalance) * 100
+
   return (
     <aside className="backtest-panel">
       <h3>Backtest</h3>
 
       <label className="field">
         Algorithm
-        <select defaultValue="dca" disabled={active}>
+        <select value={config.algo} disabled={active} onChange={e => set({ algo: e.target.value as PanelConfig["algo"] })}>
           <option value="dca">DCA</option>
+          <option value="pivot">Pivot breakout</option>
         </select>
       </label>
-      <label className="field">
-        Buy amount (USDT)
-        <input
-          type="number"
-          min={1}
-          value={config.quoteAmount}
-          disabled={active}
-          onChange={e => set({ quoteAmount: Number(e.target.value) })}
-        />
-      </label>
-      <label className="field">
-        Frequency
-        <select
-          value={config.frequencySec}
-          disabled={active}
-          onChange={e => set({ frequencySec: Number(e.target.value) })}
-        >
-          {FREQUENCIES.map(f => (
-            <option key={f.sec} value={f.sec}>{f.label}</option>
-          ))}
-        </select>
-      </label>
+      {config.algo === "dca" ? (
+        <>
+          <label className="field">
+            Buy amount (USDT)
+            <input
+              type="number"
+              min={1}
+              value={config.quoteAmount}
+              disabled={active}
+              onChange={e => set({ quoteAmount: Number(e.target.value) })}
+            />
+          </label>
+          <label className="field">
+            Frequency
+            <select
+              value={config.frequencySec}
+              disabled={active}
+              onChange={e => set({ frequencySec: Number(e.target.value) })}
+            >
+              {FREQUENCIES.map(f => (
+                <option key={f.sec} value={f.sec}>{f.label}</option>
+              ))}
+            </select>
+          </label>
+        </>
+      ) : (
+        <>
+          <label className="field">
+            Position size (USDT)
+            <input
+              type="number"
+              min={1}
+              value={config.positionSize}
+              disabled={active}
+              onChange={e => set({ positionSize: Number(e.target.value) })}
+            />
+          </label>
+          {/* Live-tunable during a pivot replay — re-runs the sim. */}
+          <label className="field">
+            TP/SL ratio (e.g. 2 = TP is 2× the SL)
+            <input
+              type="number"
+              min={0.1}
+              step={0.1}
+              value={config.tpSlRatio}
+              disabled={pivotsLocked}
+              onChange={e => set({ tpSlRatio: Number(e.target.value) })}
+            />
+          </label>
+          <label className="field">
+            SL cap (%) — max stop distance
+            <input
+              type="number"
+              min={0.1}
+              step={0.1}
+              value={config.slCapPct}
+              disabled={pivotsLocked}
+              onChange={e => set({ slCapPct: Number(e.target.value) })}
+            />
+          </label>
+        </>
+      )}
       <label className="field">
         Starting balance (USDT)
         <input
@@ -225,6 +299,16 @@ export default function BacktestPanel(p: Props) {
         >
           {exporting ? "Exporting…" : "Export candles"}
         </button>
+        <button
+          className="tool-button"
+          disabled={active || p.rangeStart === undefined || p.rangeEnd === undefined}
+          onClick={() => {
+            const name = window.prompt("Preset name")?.trim()
+            if (name) p.onSavePreset(name)
+          }}
+        >
+          Save as preset
+        </button>
       </div>
 
       {!active ? (
@@ -275,6 +359,54 @@ export default function BacktestPanel(p: Props) {
             </dd>
             <dt>Trades</dt><dd>{snap.trades.length}</dd>
           </dl>
+        </div>
+      )}
+
+      {sim && active && (
+        <div className="results">
+          <h4>Pivot results {snap.status === "finished" ? "(final)" : "(running)"}</h4>
+          <dl>
+            <dt>Position</dt>
+            <dd>{pOpen ? `${pOpen.side} @ ${fmtUsd(pOpen.entryPrice)}` : "flat"}</dd>
+            <dt>Last price</dt><dd>{last ? fmtUsd(last.close) : "—"}</dd>
+            <dt>Unrealized PnL</dt>
+            <dd className={pUnreal !== null && pUnreal < 0 ? "neg" : "pos"}>
+              {pUnreal !== null ? fmtUsd(pUnreal) : "—"} USDT
+            </dd>
+            <dt>Realized PnL</dt>
+            <dd className={pRealized < 0 ? "neg" : "pos"}>{fmtUsd(pRealized)} USDT</dd>
+            <dt>Equity</dt><dd>{fmtUsd(pEquity)} USDT</dd>
+            <dt>ROI</dt>
+            <dd className={pRoi < 0 ? "neg" : "pos"}>{pRoi.toFixed(2)} %</dd>
+            <dt>Closed trades</dt>
+            <dd>{pClosed.length}{pClosed.length > 0 ? ` · ${pWins}W/${pClosed.length - pWins}L` : ""}</dd>
+          </dl>
+        </div>
+      )}
+
+      {!running && (
+        <div className="sessions">
+          <div className="section-head">
+            <h4>Presets</h4>
+          </div>
+          {p.presets.length === 0 && <div className="sessions-empty">None — set up a backtest, then "Save as preset"</div>}
+          {p.presets.map(preset => (
+            <div key={preset.name} className="preset-row">
+              <button className="preset-load" onClick={() => p.onLoadPreset(preset)}>
+                <span className="preset-name">
+                  {preset.name}
+                  {endsNearNow(preset.interval, preset.rangeEnd) && (
+                    <span className="preset-warn" title="Ends near now — the last candle may still be forming, so the run isn't reproducible."> ⚠</span>
+                  )}
+                </span>
+                <span className="session-date">
+                  {preset.market.symbol} · {preset.interval} · {preset.config.algo} ·{" "}
+                  {new Date(preset.rangeStart * 1000).toLocaleDateString()}–{new Date(preset.rangeEnd * 1000).toLocaleDateString()}
+                </span>
+              </button>
+              <button className="preset-remove" title="Remove" onClick={() => p.onRemovePreset(preset.name)}>×</button>
+            </div>
+          ))}
         </div>
       )}
 

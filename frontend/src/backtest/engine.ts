@@ -1,5 +1,15 @@
 import { fetchKlines, fetchKlinesRange, type Candle } from "../binance/api"
-import { bot, positions, type Pivot, type PivotOptions, type Session, type SessionConfig, type Trade } from "../api/backend"
+import {
+  bot,
+  positions,
+  type Pivot,
+  type PivotOptions,
+  type PivotParams,
+  type PivotSimResult,
+  type Session,
+  type SessionConfig,
+  type Trade,
+} from "../api/backend"
 import { DEFAULT_PIVOT_OPTIONS } from "../util/pivotOptions"
 
 export type EngineStatus = "idle" | "loading" | "ready" | "playing" | "paused" | "finished"
@@ -12,6 +22,7 @@ export interface EngineSnapshot {
   upTo: number // rendered candle count (within candles)
   trades: Trade[]
   pivots: Pivot[]
+  pivotSim: PivotSimResult | null // populated only for the `pivot` algo
   session: Session | null
   speed: number // candles per second
   autoResume: boolean
@@ -30,6 +41,7 @@ const idleSnapshot = (): EngineSnapshot => ({
   upTo: 0,
   trades: [],
   pivots: [],
+  pivotSim: null,
   session: null,
   speed: 5,
   autoResume: true,
@@ -45,6 +57,7 @@ export class BacktestEngine {
   private snap = idleSnapshot()
   private config: SessionConfig | null = null
   private pivotOptions: PivotOptions = DEFAULT_PIVOT_OPTIONS
+  private pivotParams: PivotParams | null = null
   private seedHistory: Candle[] = []
   private processedUpTo = 0 // candles already sent through bot/orders
   private timer: ReturnType<typeof setTimeout> | null = null
@@ -66,8 +79,10 @@ export class BacktestEngine {
     this.stopTimer()
     this.aborted = false
     this.config = config
+    this.pivotParams = config.pivotParams ?? null
     this.processedUpTo = 0
     this.emit({ ...idleSnapshot(), status: "loading", mode: config.mode, speed: this.snap.speed, autoResume: this.snap.autoResume })
+    if (config.algo === "pivot") return this.startPivot(config)
     try {
       const candles = await fetchKlinesRange(config.market, config.interval, config.startTime, config.endTime)
       if (candles.length === 0) throw new Error("no candles in the selected range")
@@ -98,9 +113,62 @@ export class BacktestEngine {
     }
   }
 
+  /** Pivot algo: the whole strategy is simulated server-side in one stateless
+   * call (no positions session, no per-candle bot/orders). Replay then reveals
+   * the pre-computed trades by advancing the cursor. */
+  private async startPivot(config: SessionConfig) {
+    try {
+      const candles = await fetchKlinesRange(config.market, config.interval, config.startTime, config.endTime)
+      if (candles.length === 0) throw new Error("no candles in the selected range")
+      this.seedHistory = (await fetchKlines(config.market, config.interval, config.startTime * 1000 - 1)).slice(-SEED_HISTORY)
+      const result = await this.runSimulate(candles)
+      if (this.aborted) return
+      this.processedUpTo = candles.length // no per-candle backend work for pivot
+      this.snap = {
+        ...this.snap,
+        status: "ready",
+        candles,
+        preCandles: this.seedHistory,
+        upTo: 1,
+        trades: [],
+        pivots: result.pivots ?? [],
+        pivotSim: result,
+        session: null,
+        progress: 0,
+      }
+      if (config.mode === "headless") {
+        this.snap = { ...this.snap, upTo: candles.length, status: "finished", progress: 1 }
+      }
+      this.onChange(this.snap)
+    } catch (e) {
+      this.emit({ status: "idle", mode: null, error: e instanceof Error ? e.message : String(e) })
+    }
+  }
+
+  private runSimulate(candles: Candle[]): Promise<PivotSimResult> {
+    const cfg = this.config!
+    const p = this.pivotParams ?? { tpSlRatio: 2, slCapPct: 4, quoteAmount: 100 }
+    return bot.simulate(candles, this.pivotOptions, {
+      ...p,
+      feesEnabled: cfg.feesEnabled,
+      startingBalance: cfg.startingBalance,
+    })
+  }
+
   /** Advance one candle. Returns true when a significant event occurred. */
   private async stepOnce(render: boolean): Promise<boolean> {
     const { candles, session } = this.snap
+    // Pivot algo: pre-computed sim, so a step is just a cursor advance; it's
+    // "significant" (pauses playback) when a trade opens/closes on this candle.
+    if (this.config?.algo === "pivot") {
+      if (this.snap.upTo >= candles.length) return false
+      const candle = candles[this.snap.upTo]
+      const significant =
+        this.snap.pivotSim?.trades.some(t => t.entryTime === candle.time || t.exitTime === candle.time) ?? false
+      this.snap = { ...this.snap, upTo: this.snap.upTo + 1 }
+      if (render) this.onChange(this.snap)
+      return significant
+    }
     if (!session || this.snap.upTo >= candles.length) return false
     const idx = this.snap.upTo
     const candle = candles[idx]
@@ -151,7 +219,7 @@ export class BacktestEngine {
     if (!this.config) return
     const processed = this.snap.candles.slice(0, this.snap.upTo)
     await bot.seed(sessionId, {
-      algo: this.config.algo,
+      algo: this.config.algo as "dca", // reseed only happens on the dca step path
       config: this.config.algoConfig,
       candles: [...this.seedHistory, ...processed],
       options: this.pivotOptions,
@@ -311,9 +379,11 @@ export class BacktestEngine {
   }
 
   /** Live control: persists as the engine's current options; mid-replay the bot
-   * recomputes over the candles it has seen, finished/loaded views re-analyze. */
+   * recomputes over the candles it has seen, finished/loaded views re-analyze.
+   * For the pivot algo, any option change re-runs the whole strategy sim. */
   async setPivotOptions(options: PivotOptions) {
     this.pivotOptions = options
+    if (this.config?.algo === "pivot") return this.resimulate()
     const { session, status, mode } = this.snap
     if (!options.enabled) {
       if (this.snap.pivots.length > 0) this.emit({ pivots: [] })
@@ -336,6 +406,26 @@ export class BacktestEngine {
         const res = await bot.analyze(candles, options)
         this.emit({ pivots: res.pivots ?? [] })
       }
+    } catch (e) {
+      this.emit({ error: e instanceof Error ? e.message : String(e) })
+    }
+  }
+
+  /** Pivot-strategy live control: changing TP/SL ratio, SL cap, or size re-runs
+   * the sim over the same range (cursor stays put; the trade list updates). */
+  async setPivotParams(params: PivotParams) {
+    this.pivotParams = params
+    if (this.config?.algo === "pivot") return this.resimulate()
+  }
+
+  private async resimulate() {
+    const { status, candles } = this.snap
+    if (candles.length === 0) return
+    if (!["ready", "playing", "paused", "finished"].includes(status)) return
+    try {
+      const result = await this.runSimulate(candles)
+      if (this.aborted) return
+      this.emit({ pivotSim: result, pivots: result.pivots ?? [] })
     } catch (e) {
       this.emit({ error: e instanceof Error ? e.message : String(e) })
     }

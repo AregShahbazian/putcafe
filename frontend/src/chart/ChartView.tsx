@@ -4,7 +4,9 @@ import {
   HistogramSeries,
   createChart,
   createSeriesMarkers,
+  LineStyle,
   type IChartApi,
+  type IPriceLine,
   type ISeriesApi,
   type ISeriesMarkersPluginApi,
   type SeriesMarker,
@@ -12,13 +14,18 @@ import {
   type UTCTimestamp,
 } from "lightweight-charts"
 import { fetchKlines, KLINE_LIMIT, type Candle } from "../binance/api"
-import { bot, type Pivot, type PivotOptions, type Trade } from "../api/backend"
+import { bot, type Pivot, type PivotOptions, type PivotSimResult, type Trade } from "../api/backend"
 import { RangeHighlight, type RangeSelection } from "./RangeHighlight"
+import { PivotMarkers } from "./PivotMarkers"
+
+const TRADE_MARKER_SIZE = 1.4 // 40% larger than the default arrow markers
 
 const UP = "#26a69a"
 const DOWN = "#ef5350"
 const PIVOT_HIGH = "#f0a431"
 const PIVOT_LOW = "#42a5f5"
+const REVERSE = "#f0a431"
+const ENTRY_LINE = "#b2b5be"
 const LOAD_MORE_THRESHOLD = 50
 
 export interface SessionView {
@@ -27,6 +34,7 @@ export interface SessionView {
   upTo: number
   trades: Trade[]
   pivots: Pivot[]
+  pivotSim: PivotSimResult | null // present for the `pivot` algo
   fitRange: boolean
 }
 
@@ -47,6 +55,36 @@ function toSeriesCandle(c: Candle, color?: string) {
 
 function toVolumeBar(c: Candle) {
   return { time: c.time as UTCTimestamp, value: c.volume, color: c.close >= c.open ? UP : DOWN }
+}
+
+// Pivot-algo entry (arrow) + exit (circle) markers, clipped to the cursor.
+function pivotMarkers(sim: PivotSimResult, cutoff: number): SeriesMarker<Time>[] {
+  const out: SeriesMarker<Time>[] = []
+  for (const t of sim.trades) {
+    if (t.entryTime <= cutoff) {
+      const long = t.side === "long"
+      out.push({
+        time: t.entryTime as UTCTimestamp,
+        position: long ? "belowBar" : "aboveBar",
+        color: long ? UP : DOWN,
+        shape: long ? "arrowUp" : "arrowDown",
+        text: long ? "L" : "S",
+        size: TRADE_MARKER_SIZE,
+      })
+    }
+    if (t.exitTime !== null && t.exitReason !== "open" && t.exitTime <= cutoff) {
+      const color = t.exitReason === "tp" ? UP : t.exitReason === "sl" ? DOWN : REVERSE
+      out.push({
+        time: t.exitTime as UTCTimestamp,
+        position: t.side === "long" ? "aboveBar" : "belowBar",
+        color,
+        shape: "circle",
+        text: t.exitReason === "reverse" ? "R" : t.exitReason.toUpperCase(),
+        size: TRADE_MARKER_SIZE,
+      })
+    }
+  }
+  return out
 }
 
 function Legend({ candle }: { candle: Candle | null }) {
@@ -78,6 +116,8 @@ export default function ChartView({
   const candleSeriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null)
   const volumeSeriesRef = useRef<ISeriesApi<"Histogram"> | null>(null)
   const markersRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null)
+  const priceLinesRef = useRef<IPriceLine[]>([])
+  const pivotMarkersRef = useRef<PivotMarkers | null>(null)
   const rangeRef = useRef<RangeHighlight | null>(null)
   const candlesRef = useRef<Candle[]>([])
   const sessionActiveRef = useRef(false)
@@ -128,6 +168,8 @@ export default function ChartView({
 
     const range = new RangeHighlight()
     candleSeries.attachPrimitive(range)
+    const pivotMarks = new PivotMarkers()
+    candleSeries.attachPrimitive(pivotMarks)
     const markers = createSeriesMarkers(candleSeries, [])
 
     chart.subscribeClick(param => {
@@ -155,6 +197,7 @@ export default function ChartView({
     candleSeriesRef.current = candleSeries
     volumeSeriesRef.current = volumeSeries
     markersRef.current = markers
+    pivotMarkersRef.current = pivotMarks
     rangeRef.current = range
 
     return () => {
@@ -164,6 +207,7 @@ export default function ChartView({
       candleSeriesRef.current = null
       volumeSeriesRef.current = null
       markersRef.current = null
+      pivotMarkersRef.current = null
       rangeRef.current = null
     }
   }, [])
@@ -314,42 +358,61 @@ export default function ChartView({
     }
   }, [session])
 
-  // Trade + pivot markers, clipped to the replay cursor. A pivot only shows once
-  // the cursor reaches the candle that confirmed it (no-lookahead honesty).
+  // Pivots are drawn as triangles (a custom primitive); only trades use the arrow
+  // markers plugin. A pivot only shows once the cursor reaches the candle that
+  // confirmed it (no-lookahead honesty).
   useEffect(() => {
     const markers = markersRef.current
-    if (!markers) return
+    const pivotMarks = pivotMarkersRef.current
+    if (!markers || !pivotMarks) return
     if (!session) {
-      markers.setMarkers(
-        livePivots.map(pv => ({
-          time: pv.time as UTCTimestamp,
-          position: pv.type === "high" ? "aboveBar" : "belowBar",
-          color: pv.type === "high" ? PIVOT_HIGH : PIVOT_LOW,
-          shape: pv.type === "high" ? "arrowDown" : "arrowUp",
-        })),
-      )
+      markers.setMarkers([]) // no trades on the live chart
+      pivotMarks.setPivots(livePivots.map(pv => ({ time: pv.time, type: pv.type, price: pv.price })))
       return
     }
     const cutoff = session.upTo > 0 ? session.candles[session.upTo - 1].time : 0
-    const trades: SeriesMarker<Time>[] = session.trades
-      .filter(t => t.time <= cutoff)
-      .map(t => ({
-        time: t.time as UTCTimestamp,
-        position: "belowBar",
-        color: UP,
-        shape: "arrowUp",
-        text: `B ${t.quoteAmount}`,
-      }))
-    const pivots: SeriesMarker<Time>[] = session.pivots
-      .filter(pv => pv.confirmedAt <= cutoff)
-      .map(pv => ({
-        time: pv.time as UTCTimestamp,
-        position: pv.type === "high" ? "aboveBar" : "belowBar",
-        color: pv.type === "high" ? PIVOT_HIGH : PIVOT_LOW,
-        shape: pv.type === "high" ? "arrowDown" : "arrowUp",
-      }))
-    markers.setMarkers([...trades, ...pivots].sort((a, b) => (a.time as number) - (b.time as number)))
+    // Pivot algo: entry/exit markers from the sim; DCA: spot-buy markers.
+    const trades: SeriesMarker<Time>[] = session.pivotSim
+      ? pivotMarkers(session.pivotSim, cutoff)
+      : session.trades
+          .filter(t => t.time <= cutoff)
+          .map(t => ({
+            time: t.time as UTCTimestamp,
+            position: "belowBar",
+            color: UP,
+            shape: "arrowUp",
+            text: `B ${t.quoteAmount}`,
+            size: TRADE_MARKER_SIZE,
+          }))
+    markers.setMarkers(trades.sort((a, b) => (a.time as number) - (b.time as number)))
+    pivotMarks.setPivots(
+      session.pivots
+        .filter(pv => pv.confirmedAt <= cutoff)
+        .map(pv => ({ time: pv.time, type: pv.type, price: pv.price })),
+    )
   }, [session, livePivots])
+
+  // Pivot bracket lines (entry / SL / TP) for the position open at the cursor.
+  useEffect(() => {
+    const series = candleSeriesRef.current
+    if (!series) return
+    for (const line of priceLinesRef.current) series.removePriceLine(line)
+    priceLinesRef.current = []
+    if (!session?.pivotSim || session.upTo === 0) return
+    const cutoff = session.candles[session.upTo - 1].time
+    // The trade entered at/before the cursor and not yet exited (or exiting later).
+    const open = session.pivotSim.trades.find(
+      t => t.entryTime <= cutoff && (t.exitTime === null || t.exitTime > cutoff),
+    )
+    if (!open) return
+    const add = (price: number, color: string, title: string) =>
+      priceLinesRef.current.push(
+        series.createPriceLine({ price, color, lineWidth: 1, lineStyle: LineStyle.Dashed, axisLabelVisible: true, title }),
+      )
+    add(open.entryPrice, ENTRY_LINE, `Entry ${open.side}`)
+    add(open.slPrice, DOWN, "SL")
+    add(open.tpPrice, UP, "TP")
+  }, [session])
 
   // Backtest range highlight (live + session).
   useEffect(() => {
