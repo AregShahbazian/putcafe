@@ -8,6 +8,7 @@ import TimeframeSelector, { type Interval } from "./components/TimeframeSelector
 import BacktestPanel, { type PanelConfig, type PickerField } from "./components/BacktestPanel"
 import PlaybackControls from "./components/PlaybackControls"
 import ChartContextMenu, { type ContextMenuState } from "./components/ChartContextMenu"
+import { useSavedCandles } from "./util/savedCandles"
 
 const DEFAULT_MARKET: Market = { symbol: "BTCUSDT", baseAsset: "BTC", quoteAsset: "USDT" }
 
@@ -31,6 +32,7 @@ export default function App() {
   const [rangeEnd, setRangeEnd] = useState<number | undefined>()
   const [picking, setPicking] = useState<PickerField>(null)
   const [ctxMenu, setCtxMenu] = useState<ContextMenuState | null>(null)
+  const savedCandles = useSavedCandles()
 
   const engineRef = useRef<BacktestEngine | null>(null)
   const [snap, setSnap] = useState<EngineSnapshot | null>(null)
@@ -129,8 +131,8 @@ export default function App() {
             session={showSession}
             rangeSelection={{ start: rangeStart, end: rangeEnd }}
             onChartClick={onChartClick}
-            onChartContextMenu={(time, x, y) => {
-              if (time !== null) setCtxMenu({ time, x, y })
+            onChartContextMenu={(time, x, y, candle) => {
+              if (time !== null) setCtxMenu({ time, x, y, candle })
             }}
           />
           {replayActive && (
@@ -152,6 +154,11 @@ export default function App() {
             snap={s}
             config={config}
             onConfig={setConfig}
+            market={market.symbol}
+            interval={interval}
+            savedCandles={savedCandles.saved}
+            onRemoveSaved={savedCandles.remove}
+            onClearSaved={savedCandles.clear}
             rangeStart={rangeStart}
             rangeEnd={rangeEnd}
             picking={picking}
@@ -170,6 +177,9 @@ export default function App() {
         <ChartContextMenu
           menu={ctxMenu}
           onClose={() => setCtxMenu(null)}
+          onSaveCandle={candle =>
+            savedCandles.save({ market: market.symbol, interval, candle })
+          }
           onSetStart={t => {
             setRangeStart(t)
             setPanelOpen(true)

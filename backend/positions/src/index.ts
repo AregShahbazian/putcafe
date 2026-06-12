@@ -173,6 +173,14 @@ app.post("/api/positions/sessions/:id/finish", async (req, reply) => {
   return { ok: true }
 })
 
+app.delete("/api/positions/sessions", async req => {
+  const { except } = req.query as { except?: string }
+  const res = except
+    ? await pool.query("DELETE FROM sessions WHERE id <> $1", [except])
+    : await pool.query("DELETE FROM sessions")
+  return { ok: true, deleted: res.rowCount ?? 0 }
+})
+
 app.delete("/api/positions/sessions/:id", async (req, reply) => {
   const { id } = req.params as { id: string }
   const res = await pool.query("DELETE FROM sessions WHERE id = $1", [id])

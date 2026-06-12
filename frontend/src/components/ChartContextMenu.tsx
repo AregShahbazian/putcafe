@@ -1,9 +1,11 @@
 import { useEffect, useRef } from "react"
+import type { Candle } from "../binance/api"
 
 export interface ContextMenuState {
   x: number
   y: number
   time: number
+  candle: Candle | null
 }
 
 interface Props {
@@ -11,10 +13,11 @@ interface Props {
   onSetStart: (time: number) => void
   onSetEnd: (time: number) => void
   onStartReplayHere: (time: number) => void
+  onSaveCandle: (candle: Candle) => void
   onClose: () => void
 }
 
-export default function ChartContextMenu({ menu, onSetStart, onSetEnd, onStartReplayHere, onClose }: Props) {
+export default function ChartContextMenu({ menu, onSetStart, onSetEnd, onStartReplayHere, onSaveCandle, onClose }: Props) {
   const ref = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -49,6 +52,17 @@ export default function ChartContextMenu({ menu, onSetStart, onSetEnd, onStartRe
       {item("Set backtest start here", onSetStart)}
       {item("Set backtest end here", onSetEnd)}
       {item("Start replay here", onStartReplayHere)}
+      {menu.candle && (
+        <button
+          className="ctx-item"
+          onClick={() => {
+            onSaveCandle(menu.candle!)
+            onClose()
+          }}
+        >
+          Save candle
+        </button>
+      )}
     </div>
   )
 }

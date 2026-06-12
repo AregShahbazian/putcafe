@@ -1,6 +1,9 @@
 import { useEffect, useState } from "react"
 import { positions, type Session } from "../api/backend"
 import type { EngineSnapshot } from "../backtest/engine"
+import { fetchKlinesRange } from "../binance/api"
+import { downloadJson, fileStamp } from "../util/download"
+import type { SavedCandle } from "../util/savedCandles"
 
 export type PickerField = "start" | "end" | null
 
@@ -23,6 +26,8 @@ interface Props {
   snap: EngineSnapshot
   config: PanelConfig
   onConfig: (c: PanelConfig) => void
+  market: string
+  interval: string
   rangeStart?: number
   rangeEnd?: number
   picking: PickerField
@@ -30,6 +35,9 @@ interface Props {
   onStart: () => void
   onStop: () => void
   onLoadSession: (id: string) => void
+  savedCandles: SavedCandle[]
+  onRemoveSaved: (index: number) => void
+  onClearSaved: () => void
 }
 
 const fmtDate = (t?: number) =>
@@ -43,14 +51,38 @@ export default function BacktestPanel(p: Props) {
   const running = snap.status === "playing" || snap.status === "ready" || snap.status === "paused"
   const [sessions, setSessions] = useState<Session[]>([])
   const [sessionsError, setSessionsError] = useState<string | null>(null)
+  const [exporting, setExporting] = useState(false)
 
-  useEffect(() => {
-    if (snap.status !== "idle" && snap.status !== "finished") return
+  const refreshSessions = () =>
     positions
       .listSessions()
       .then(setSessions)
       .catch((e: unknown) => setSessionsError(e instanceof Error ? e.message : String(e)))
+
+  useEffect(() => {
+    if (snap.status !== "idle" && snap.status !== "finished") return
+    void refreshSessions()
   }, [snap.status])
+
+  const exportRange = async () => {
+    if (p.rangeStart === undefined || p.rangeEnd === undefined) return
+    setExporting(true)
+    try {
+      const candles = await fetchKlinesRange(p.market, p.interval, p.rangeStart, p.rangeEnd)
+      downloadJson(
+        `candles_${p.market}_${p.interval}_${fileStamp(p.rangeStart)}_${fileStamp(p.rangeEnd)}.json`,
+        { market: p.market, interval: p.interval, candles },
+      )
+    } finally {
+      setExporting(false)
+    }
+  }
+
+  const clearSessions = async () => {
+    const activeId = s && s.status === "active" ? s.id : undefined
+    await positions.clearSessions(activeId).catch(() => {})
+    void refreshSessions()
+  }
 
   const set = (patch: Partial<PanelConfig>) => p.onConfig({ ...config, ...patch })
 
@@ -142,6 +174,13 @@ export default function BacktestPanel(p: Props) {
           {fmtDate(p.rangeEnd) ?? "Select End Candle"}
         </button>
         {p.picking && <div className="picker-hint">Click a candle on the chart (Esc to cancel)</div>}
+        <button
+          className="tool-button"
+          disabled={p.rangeStart === undefined || p.rangeEnd === undefined || exporting}
+          onClick={() => void exportRange()}
+        >
+          {exporting ? "Exporting…" : "Export candles"}
+        </button>
       </div>
 
       {!active ? (
@@ -197,7 +236,14 @@ export default function BacktestPanel(p: Props) {
 
       {!running && (
         <div className="sessions">
-          <h4>Sessions</h4>
+          <div className="section-head">
+            <h4>Sessions</h4>
+            {sessions.length > 0 && (
+              <button className="tool-button small" onClick={() => void clearSessions()}>
+                Clear sessions
+              </button>
+            )}
+          </div>
           {sessionsError && <div className="panel-error">{sessionsError}</div>}
           {sessions.length === 0 && !sessionsError && <div className="sessions-empty">None yet</div>}
           {sessions.map(item => (
@@ -210,6 +256,36 @@ export default function BacktestPanel(p: Props) {
           ))}
         </div>
       )}
+
+      <div className="saved-candles">
+        <div className="section-head">
+          <h4>Saved candles</h4>
+          {p.savedCandles.length > 0 && (
+            <button className="tool-button small" onClick={p.onClearSaved}>Clear</button>
+          )}
+        </div>
+        {p.savedCandles.length === 0 && <div className="sessions-empty">None — right-click a candle → "Save candle"</div>}
+        {p.savedCandles.map((sc, i) => (
+          <div key={`${sc.market}-${sc.interval}-${sc.candle.time}`} className="saved-row">
+            <span>
+              {sc.market} · {sc.interval} ·{" "}
+              {new Date(sc.candle.time * 1000).toLocaleString(undefined, { dateStyle: "short", timeStyle: "short" })}{" "}
+              · C {sc.candle.close}
+            </span>
+            <button title="Remove" onClick={() => p.onRemoveSaved(i)}>×</button>
+          </div>
+        ))}
+        {p.savedCandles.length > 0 && (
+          <button
+            className="tool-button"
+            onClick={() =>
+              downloadJson(`saved-candles_${fileStamp(Math.floor(Date.now() / 1000))}.json`, p.savedCandles)
+            }
+          >
+            Export saved candles
+          </button>
+        )}
+      </div>
     </aside>
   )
 }

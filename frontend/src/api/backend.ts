@@ -71,6 +71,11 @@ export const positions = {
     }),
   finish: (id: string) => req<{ ok: true }>(`/api/positions/sessions/${id}/finish`, { method: "POST" }),
   remove: (id: string) => req<{ ok: true }>(`/api/positions/sessions/${id}`, { method: "DELETE" }),
+  clearSessions: (exceptId?: string) =>
+    req<{ ok: true; deleted: number }>(
+      `/api/positions/sessions${exceptId ? `?except=${exceptId}` : ""}`,
+      { method: "DELETE" },
+    ),
 }
 
 export const bot = {

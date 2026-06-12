@@ -33,7 +33,7 @@ interface Props {
   session: SessionView | null
   rangeSelection: RangeSelection
   onChartClick?: (time: number) => void
-  onChartContextMenu?: (time: number | null, x: number, y: number) => void
+  onChartContextMenu?: (time: number | null, x: number, y: number, candle: Candle | null) => void
 }
 
 function toSeriesCandle(c: Candle) {
@@ -137,7 +137,8 @@ export default function ChartView({
       e.preventDefault()
       const rect = container.getBoundingClientRect()
       const time = chart.timeScale().coordinateToTime(e.clientX - rect.left)
-      ctxMenuRef.current(time === null ? null : (time as number), e.clientX, e.clientY)
+      const candle = time === null ? null : (candlesRef.current.find(c => c.time === time) ?? null)
+      ctxMenuRef.current(time === null ? null : (time as number), e.clientX, e.clientY, candle)
     }
     container.addEventListener("contextmenu", onContextMenu)
 

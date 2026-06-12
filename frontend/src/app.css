@@ -514,3 +514,66 @@ button {
   0% { left: -40%; }
   100% { left: 100%; }
 }
+
+/* Candle tools */
+
+.section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.section-head h4 {
+  margin: 8px 0 4px;
+}
+
+.tool-button {
+  background: #1e222d;
+  border: 1px solid #2a2e39;
+  border-radius: 4px;
+  padding: 8px;
+  color: #d1d4dc;
+}
+
+.tool-button:hover:not(:disabled) {
+  background: #2a2e39;
+}
+
+.tool-button:disabled {
+  color: #787b86;
+  cursor: default;
+}
+
+.tool-button.small {
+  padding: 3px 8px;
+  font-size: 11px;
+}
+
+.saved-candles {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.saved-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  background: #1e222d;
+  border: 1px solid #2a2e39;
+  border-radius: 4px;
+  padding: 5px 8px;
+  font-size: 12px;
+}
+
+.saved-row button {
+  background: none;
+  border: none;
+  color: #787b86;
+  padding: 0 4px;
+}
+
+.saved-row button:hover {
+  color: #ef5350;
+}
