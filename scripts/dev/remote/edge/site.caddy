@@ -6,7 +6,7 @@
 #   /web/[<slot>/]    -> web builds (rsynced by ci.yml / deploy.sh)
 #   /api/positions/*  -> positions-backend container (127.0.0.1:8101)
 #   /api/bot/*        -> bot-backend container       (127.0.0.1:8102)
-#   /                 -> redirect to /web/
+#   /                 -> generated landing page (site/index.html, gen-landing-index.sh)
 #
 # ops.<host> is the VPS-wide ops UI (Dozzle, all containers on the box, port 8103);
 # auth is handled by Dozzle itself (users.yml on the VPS), so this file stays
@@ -17,7 +17,6 @@ putcafe.{$ORION_HOST} {
 	reverse_proxy /api/positions/* 127.0.0.1:8101
 	reverse_proxy /api/bot/* 127.0.0.1:8102
 	file_server
-	redir / /web/ 302
 }
 
 ops.{$ORION_HOST} {

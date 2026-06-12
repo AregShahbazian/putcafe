@@ -19,6 +19,7 @@ ssh_ 'mkdir -p /root/putcafe/site/web'
 
 log "uploading putcafe edge assets"
 scp_ "$remote_dir/site.caddy" "$remote_dir/setup.sh" "$remote_dir/ops.sh" \
+     "$remote_dir/gen-landing-index.sh" \
      "$CONN_USER@$CONN_IP:/root/putcafe/"
 
 log "running remote setup (idempotent)…"

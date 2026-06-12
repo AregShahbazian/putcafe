@@ -103,12 +103,18 @@ jobs:
           chmod 600 ~/.ssh/id_ed25519
           ssh-keyscan -p "${{ vars.VPS_PORT }}" -H "${{ vars.VPS_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
 
-      - name: Deploy → VPS
+      - name: Deploy → VPS (and regenerate the root landing page)
         run: |
+          # Marker read by gen-landing-index.sh to show the deployed commit per landing row.
+          echo "${GITHUB_SHA:0:7}" > frontend/dist/.putcafe-sha
           ssh -p "${{ vars.VPS_PORT }}" "${{ vars.VPS_USER }}@${{ vars.VPS_HOST }}" \
             'mkdir -p ${{ steps.slot.outputs.dir }}'
           rsync -az --delete -e "ssh -p ${{ vars.VPS_PORT }}" \
             frontend/dist/ "${{ vars.VPS_USER }}@${{ vars.VPS_HOST }}:${{ steps.slot.outputs.dir }}/"
+          scp -P "${{ vars.VPS_PORT }}" scripts/dev/remote/edge/gen-landing-index.sh \
+            "${{ vars.VPS_USER }}@${{ vars.VPS_HOST }}:/root/putcafe/gen-landing-index.sh"
+          ssh -p "${{ vars.VPS_PORT }}" "${{ vars.VPS_USER }}@${{ vars.VPS_HOST }}" \
+            "bash /root/putcafe/gen-landing-index.sh /root/putcafe/site"
 
   # --- Build + deploy: prod (tag, GATED) --------------------------------------
   web-prod:
@@ -137,14 +143,20 @@ jobs:
           chmod 600 ~/.ssh/id_ed25519
           ssh-keyscan -p "${{ vars.VPS_PORT }}" -H "${{ vars.VPS_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
 
-      - name: Deploy → VPS prod root
+      - name: Deploy → VPS prod root (and regenerate the root landing page)
         # The root must NOT use --delete: it would wipe the sibling staging/preview
         # slot dirs that live under site/web/.
         run: |
+          # Marker read by gen-landing-index.sh to show the deployed commit per landing row.
+          echo "${GITHUB_SHA:0:7}" > frontend/dist/.putcafe-sha
           ssh -p "${{ vars.VPS_PORT }}" "${{ vars.VPS_USER }}@${{ vars.VPS_HOST }}" \
             'mkdir -p /root/putcafe/site/web'
           rsync -az -e "ssh -p ${{ vars.VPS_PORT }}" \
             frontend/dist/ "${{ vars.VPS_USER }}@${{ vars.VPS_HOST }}:/root/putcafe/site/web/"
+          scp -P "${{ vars.VPS_PORT }}" scripts/dev/remote/edge/gen-landing-index.sh \
+            "${{ vars.VPS_USER }}@${{ vars.VPS_HOST }}:/root/putcafe/gen-landing-index.sh"
+          ssh -p "${{ vars.VPS_PORT }}" "${{ vars.VPS_USER }}@${{ vars.VPS_HOST }}" \
+            "bash /root/putcafe/gen-landing-index.sh /root/putcafe/site"
 
   # --- Deploy API stack (main + backend changes, or manual deploy_api dispatch
   # from any branch; Docker layer cache on the box) ------------------------------

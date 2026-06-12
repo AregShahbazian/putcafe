@@ -18,6 +18,9 @@ source "$here/_conn.sh"
 log "building frontend (yarn build)"
 (cd "$frontend" && yarn --frozen-lockfile --silent && yarn --silent build)
 
+# Marker read by gen-landing-index.sh to show the deployed commit per landing row.
+git -C "$frontend" rev-parse --short=7 HEAD > "$frontend/dist/.putcafe-sha"
+
 if [ "$slot" = "prod" ]; then
   # Prod is the /web/ root — NEVER --delete (it would wipe the sibling slot dirs).
   dest=/root/putcafe/site/web
@@ -31,6 +34,10 @@ else
   rsync_ -az --delete "$frontend/dist/" "$CONN_USER@$CONN_IP:$dest/"
 fi
 
+log "regenerating the root landing page"
+scp_ "$here/../../remote/edge/gen-landing-index.sh" "$CONN_USER@$CONN_IP:/root/putcafe/gen-landing-index.sh"
+ssh_ 'bash /root/putcafe/gen-landing-index.sh /root/putcafe/site'
+
 host="putcafe.${CONN_IP//./-}.sslip.io"
 [ "$slot" = "prod" ] && url="https://$host/web/" || url="https://$host/web/$slot/"
-log "done → $url"
+log "done → $url  | landing: https://$host/"

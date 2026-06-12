@@ -8,8 +8,8 @@
 # reverted on failure), reloads the edge, and generates the putcafe CI deploy key.
 # Orion is required and otherwise untouched.
 #
-# Expects the putcafe assets already copied to /root/putcafe/ (putcafe.caddy, ops.sh,
-# setup.sh) by the laptop orchestrator.
+# Expects the putcafe assets already copied to /root/putcafe/ (site.caddy, ops.sh,
+# setup.sh, gen-landing-index.sh) by the laptop orchestrator.
 set -euo pipefail
 log() { printf '\033[1;35m[putcafe-vps]\033[0m %s\n' "$*"; }
 die() { printf '\033[1;31m[putcafe-vps] %s\033[0m\n' "$*" >&2; exit 1; }
@@ -39,7 +39,11 @@ log "edge host: $ORION_HOST → site: putcafe.$ORION_HOST"
 # --- Layout ---------------------------------------------------------------------------
 log "laying out $PUTCAFE/site/web"
 mkdir -p "$PUTCAFE/site/web"
-chmod +x "$PUTCAFE/ops.sh" "$PUTCAFE/setup.sh" 2>/dev/null || true
+chmod +x "$PUTCAFE/ops.sh" "$PUTCAFE/setup.sh" "$PUTCAFE/gen-landing-index.sh" 2>/dev/null || true
+
+# --- Root landing page (lists all deployed builds; deploys keep it fresh) --------------
+log "generating the root landing page"
+bash "$PUTCAFE/gen-landing-index.sh" "$PUTCAFE/site"
 
 # --- Migrate the legacy putcafe.caddy wiring (renamed to site.caddy) -------------------
 if grep -qxF "$OLD_IMPORT" "$ORION_CADDYFILE"; then
