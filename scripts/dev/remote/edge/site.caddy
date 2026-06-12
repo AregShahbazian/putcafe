@@ -3,11 +3,15 @@
 # ORION_HOST comes from /root/orion/orion-web.env via the orion-web systemd unit,
 # so the host tracks the edge automatically: putcafe.203-0-113-10.sslip.io.
 #
-#   /web/[<slot>/]  -> web builds (rsynced by ci.yml / deploy.sh)
-#   /               -> redirect to /web/
+#   /web/[<slot>/]    -> web builds (rsynced by ci.yml / deploy.sh)
+#   /api/positions/*  -> positions-backend container (127.0.0.1:8101)
+#   /api/bot/*        -> bot-backend container       (127.0.0.1:8102)
+#   /                 -> redirect to /web/
 
 putcafe.{$ORION_HOST} {
 	root * /root/putcafe/site
+	reverse_proxy /api/positions/* 127.0.0.1:8101
+	reverse_proxy /api/bot/* 127.0.0.1:8102
 	file_server
 	redir / /web/ 302
 }

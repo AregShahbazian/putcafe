@@ -1,6 +1,7 @@
 node_modules/
 dist/
 *.tsbuildinfo
+__pycache__/
 .idea/
 *.local
 .DS_Store
