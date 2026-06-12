@@ -43,8 +43,8 @@ const idleSnapshot = (): EngineSnapshot => ({
   pivots: [],
   pivotSim: null,
   session: null,
-  speed: 5,
-  autoResume: true,
+  speed: 10,
+  autoResume: false,
   progress: 0,
   error: null,
 })

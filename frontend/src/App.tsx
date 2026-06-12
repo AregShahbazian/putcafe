@@ -50,6 +50,32 @@ export default function App() {
   const engine = engineRef.current
   const s: EngineSnapshot = snap ?? engine.snapshot
 
+  // Debug: `pc()` in the browser console dumps the live state for inspection.
+  // `pc(time)` filters trades to those touching that candle time (sec or ms).
+  useEffect(() => {
+    ;(window as unknown as { pc: (t?: number) => unknown }).pc = (t?: number) => {
+      const sim = engine.snapshot.pivotSim
+      const norm = t === undefined ? undefined : t > 1e12 ? Math.floor(t / 1000) : t
+      const trades =
+        sim && norm !== undefined
+          ? sim.trades.filter(tr => tr.entryTime === norm || tr.exitTime === norm)
+          : sim?.trades
+      const dump = {
+        market: market.symbol,
+        interval,
+        config,
+        pivotOptions: pivotOptions.options,
+        status: engine.snapshot.status,
+        session: engine.snapshot.session,
+        sim: sim && { equity: sim.equity, wins: sim.wins, losses: sim.losses, realizedPnl: sim.realizedPnl },
+        trades,
+      }
+      // eslint-disable-next-line no-console
+      console.log(dump)
+      return dump
+    }
+  }, [engine, market.symbol, interval, config, pivotOptions.options])
+
   useEffect(() => {
     fetchMarkets()
       .then(setMarkets)
