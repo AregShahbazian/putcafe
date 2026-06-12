@@ -10,6 +10,7 @@ import PlaybackControls from "./components/PlaybackControls"
 import ChartContextMenu, { type ContextMenuState } from "./components/ChartContextMenu"
 import { useSavedCandles } from "./util/savedCandles"
 import { usePivotOptions } from "./util/pivotOptions"
+import { usePresets, type Preset } from "./util/presets"
 import type { PivotOptions } from "./api/backend"
 
 const DEFAULT_MARKET: Market = { symbol: "BTCUSDT", baseAsset: "BTC", quoteAsset: "USDT" }
@@ -40,6 +41,7 @@ export default function App() {
   const [ctxMenu, setCtxMenu] = useState<ContextMenuState | null>(null)
   const savedCandles = useSavedCandles()
   const pivotOptions = usePivotOptions()
+  const presets = usePresets()
 
   const engineRef = useRef<BacktestEngine | null>(null)
   const [snap, setSnap] = useState<EngineSnapshot | null>(null)
@@ -109,6 +111,26 @@ export default function App() {
       feesEnabled: config.feesEnabled,
     }
     void engine.start(sessionConfig)
+  }
+
+  const savePreset = (name: string) => {
+    if (rangeStart === undefined || rangeEnd === undefined) return
+    presets.save({ name, market, interval, rangeStart, rangeEnd, config, pivotOptions: pivotOptions.options })
+  }
+
+  const loadPreset = (p: Preset) => {
+    if (engine.snapshot.status !== "idle") void engine.stop()
+    // Pre-sync the market/interval key so the change effect below doesn't wipe
+    // the range we're about to set from the preset.
+    prevKeyRef.current = `${p.market.symbol}-${p.interval}`
+    setMarket(p.market)
+    setInterval(p.interval)
+    setConfig(p.config)
+    setRangeStart(p.rangeStart)
+    setRangeEnd(p.rangeEnd)
+    pivotOptions.set(p.pivotOptions)
+    setPicking(null)
+    setPanelOpen(true)
   }
 
   const onChartClick = (time: number) => {
@@ -193,6 +215,10 @@ export default function App() {
             onClearSaved={savedCandles.clear}
             pivotOptions={pivotOptions.options}
             onPivotOptions={(patch: Partial<PivotOptions>) => pivotOptions.set(patch)}
+            presets={presets.presets}
+            onSavePreset={savePreset}
+            onLoadPreset={loadPreset}
+            onRemovePreset={presets.remove}
             rangeStart={rangeStart}
             rangeEnd={rangeEnd}
             picking={picking}

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react"
 import { positions, type PivotOptions, type Session } from "../api/backend"
+import type { Preset } from "../util/presets"
 import type { EngineSnapshot } from "../backtest/engine"
 import { fetchKlinesRange } from "../binance/api"
 import { downloadJson, fileStamp } from "../util/download"
@@ -13,6 +14,17 @@ const FREQUENCIES: Array<{ label: string; sec: number }> = [
   { label: "Weekly", sec: 7 * 86400 },
   { label: "Every 2 weeks", sec: 14 * 86400 },
 ]
+
+const INTERVAL_SEC: Record<string, number> = {
+  "1m": 60, "3m": 180, "5m": 300, "15m": 900, "30m": 1800,
+  "1h": 3600, "2h": 7200, "4h": 14400, "6h": 21600, "12h": 43200,
+  "1d": 86400, "3d": 259200, "1w": 604800,
+}
+
+// A preset whose end is within ~2 candles of now may include a still-forming
+// candle → its run isn't reproducible.
+const endsNearNow = (interval: string, end: number) =>
+  Date.now() / 1000 - end < 2 * (INTERVAL_SEC[interval] ?? 3600)
 
 export interface PanelConfig {
   mode: "replay" | "headless"
@@ -45,6 +57,10 @@ interface Props {
   onClearSaved: () => void
   pivotOptions: PivotOptions
   onPivotOptions: (patch: Partial<PivotOptions>) => void
+  presets: Preset[]
+  onSavePreset: (name: string) => void
+  onLoadPreset: (preset: Preset) => void
+  onRemovePreset: (name: string) => void
 }
 
 const fmtDate = (t?: number) =>
@@ -283,6 +299,16 @@ export default function BacktestPanel(p: Props) {
         >
           {exporting ? "Exporting…" : "Export candles"}
         </button>
+        <button
+          className="tool-button"
+          disabled={active || p.rangeStart === undefined || p.rangeEnd === undefined}
+          onClick={() => {
+            const name = window.prompt("Preset name")?.trim()
+            if (name) p.onSavePreset(name)
+          }}
+        >
+          Save as preset
+        </button>
       </div>
 
       {!active ? (
@@ -355,6 +381,32 @@ export default function BacktestPanel(p: Props) {
             <dt>Closed trades</dt>
             <dd>{pClosed.length}{pClosed.length > 0 ? ` · ${pWins}W/${pClosed.length - pWins}L` : ""}</dd>
           </dl>
+        </div>
+      )}
+
+      {!running && (
+        <div className="sessions">
+          <div className="section-head">
+            <h4>Presets</h4>
+          </div>
+          {p.presets.length === 0 && <div className="sessions-empty">None — set up a backtest, then "Save as preset"</div>}
+          {p.presets.map(preset => (
+            <div key={preset.name} className="preset-row">
+              <button className="preset-load" onClick={() => p.onLoadPreset(preset)}>
+                <span className="preset-name">
+                  {preset.name}
+                  {endsNearNow(preset.interval, preset.rangeEnd) && (
+                    <span className="preset-warn" title="Ends near now — the last candle may still be forming, so the run isn't reproducible."> ⚠</span>
+                  )}
+                </span>
+                <span className="session-date">
+                  {preset.market.symbol} · {preset.interval} · {preset.config.algo} ·{" "}
+                  {new Date(preset.rangeStart * 1000).toLocaleDateString()}–{new Date(preset.rangeEnd * 1000).toLocaleDateString()}
+                </span>
+              </button>
+              <button className="preset-remove" title="Remove" onClick={() => p.onRemovePreset(preset.name)}>×</button>
+            </div>
+          ))}
         </div>
       )}
 
