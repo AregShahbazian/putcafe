@@ -67,6 +67,7 @@ interface Props {
   onSavePreset: (name: string) => void
   onLoadPreset: (preset: Preset) => void
   onRemovePreset: (name: string) => void
+  onRandomize: () => Promise<{ start: number; end: number }>
 }
 
 const fmtDate = (t?: number) =>
@@ -79,6 +80,20 @@ export default function BacktestPanel(p: Props) {
   const active = snap.status !== "idle" && snap.status !== "loading"
   const running = snap.status === "playing" || snap.status === "ready" || snap.status === "paused"
   const [exporting, setExporting] = useState(false)
+  const [rolling, setRolling] = useState(false)
+  const [rollErr, setRollErr] = useState<string | null>(null)
+
+  const rollRandom = async () => {
+    setRolling(true)
+    setRollErr(null)
+    try {
+      await p.onRandomize()
+    } catch (e) {
+      setRollErr(e instanceof Error ? e.message : String(e))
+    } finally {
+      setRolling(false)
+    }
+  }
 
   const exportRange = async () => {
     if (p.rangeStart === undefined || p.rangeEnd === undefined) return
@@ -277,6 +292,15 @@ export default function BacktestPanel(p: Props) {
       </div>
 
       <div className="pickers">
+        <button
+          className="tool-button"
+          disabled={active || rolling}
+          title="Pick a random start/end window from this market's history"
+          onClick={() => void rollRandom()}
+        >
+          {rolling ? "Rolling…" : "🎲 Random range"}
+        </button>
+        {rollErr && <div className="panel-error">{rollErr}</div>}
         <button
           className={p.picking === "start" ? "picker active" : "picker"}
           disabled={active}

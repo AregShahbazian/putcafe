@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react"
-import { fetchMarkets, type Market } from "./binance/api"
+import { fetchMarkets, fetchKlineBounds, INTERVAL_SECONDS, type Market } from "./binance/api"
+import { rollRandomRange, type RandomRangeOpts } from "./util/randomRange"
 import { BacktestEngine, type EngineSnapshot } from "./backtest/engine"
 import type { SessionConfig } from "./api/backend"
 import ChartView, { type SessionView } from "./chart/ChartView"
@@ -167,6 +168,23 @@ export default function App() {
     presets: presets.presets.map(p => p.name),
   }
 
+  // Roll a random backtest range from the current market's available history and
+  // fill the range inputs (same values Start/presets/bridge read). Re-reads
+  // uiRef after the fetch: if the market/interval changed mid-flight, the
+  // change-effect already cleared the range — don't stamp a stale one back.
+  const randomizeRange = async (opts?: RandomRangeOpts): Promise<{ start: number; end: number }> => {
+    const sym = market.symbol
+    const iv = interval
+    const bounds = await fetchKlineBounds(sym, iv)
+    const rolled = rollRandomRange(bounds, INTERVAL_SECONDS[iv] ?? 3600, opts)
+    if (uiRef.current.market.symbol === sym && uiRef.current.interval === iv) {
+      setRangeStart(rolled.start)
+      setRangeEnd(rolled.end)
+      setPanelOpen(true)
+    }
+    return rolled
+  }
+
   // Bridge-driven start: builds the SessionConfig from merged current-state +
   // overrides itself (no stale setState reads) and syncs the visible UI to it.
   const startFromBridge = (o: SessionOverrides) => {
@@ -227,8 +245,8 @@ export default function App() {
     loadPreset(p)
   }
 
-  const bridgeRef = useRef({ startFromBridge, loadPresetByName })
-  bridgeRef.current = { startFromBridge, loadPresetByName }
+  const bridgeRef = useRef({ startFromBridge, loadPresetByName, randomizeRange })
+  bridgeRef.current = { startFromBridge, loadPresetByName, randomizeRange }
 
   useEffect(() => {
     installBridge(engine)
@@ -238,6 +256,7 @@ export default function App() {
       stopSession: () => engine.stop(),
       loadPreset: name => bridgeRef.current.loadPresetByName(name),
       loadSession: id => void engine.loadSession(id),
+      randomRange: opts => bridgeRef.current.randomizeRange(opts),
     })
   }, [engine])
 
@@ -337,6 +356,7 @@ export default function App() {
             onSavePreset={savePreset}
             onLoadPreset={loadPreset}
             onRemovePreset={presets.remove}
+            onRandomize={randomizeRange}
             rangeStart={rangeStart}
             rangeEnd={rangeEnd}
             picking={picking}

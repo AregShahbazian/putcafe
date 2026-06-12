@@ -59,3 +59,31 @@ test("console bridge drives a pivot backtest end-to-end", async ({ page }) => {
   const stopped = await page.evaluate(() => window.pc.session.stop())
   expect(stopped.status).toBe("idle")
 })
+
+test("random range rolls a bounded, candle-aligned window the UI and a run accept", async ({ page }) => {
+  await page.goto("/")
+  await page.waitForFunction(() => "pc" in window)
+  await page.evaluate(() => window.pc.ready)
+
+  // Default market is BTCUSDT 1h (3600s candles). Keep the window small so the
+  // headless run below is quick, while still exercising the clamp/alignment.
+  const rolled = await page.evaluate(() => window.pc.backtest.randomRange({ minBars: 50, maxBars: 100 }))
+  expect(rolled.market).toBe("BTCUSDT")
+  expect(rolled.interval).toBe("1h")
+  expect(rolled.start).toBeLessThan(rolled.end)
+  // Candle-aligned to the hour, window within the requested bar bounds.
+  expect(rolled.start % 3600).toBe(0)
+  expect(rolled.end % 3600).toBe(0)
+  const bars = (rolled.end - rolled.start) / 3600
+  expect(bars).toBeGreaterThanOrEqual(50)
+  expect(bars).toBeLessThanOrEqual(100)
+
+  // The roll filled the UI range — Start/presets/bridge all read these.
+  const cfg = await page.evaluate(() => window.pc.state.config())
+  expect(cfg.rangeStart).toBe(rolled.start)
+  expect(cfg.rangeEnd).toBe(rolled.end)
+
+  // The rolled range flows through a normal run unchanged (defaults from UI).
+  const run = await page.evaluate(() => window.pc.session.start({ algo: "dca", mode: "headless" }))
+  expect(run.status).toBe("finished")
+})
