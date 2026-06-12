@@ -6,6 +6,7 @@ import ChartView, { type SessionView } from "./chart/ChartView"
 import MarketSelector from "./components/MarketSelector"
 import TimeframeSelector, { type Interval } from "./components/TimeframeSelector"
 import BacktestPanel, { type PanelConfig, type PickerField } from "./components/BacktestPanel"
+import OverviewWidget from "./components/OverviewWidget"
 import PlaybackControls from "./components/PlaybackControls"
 import ChartContextMenu, { type ContextMenuState } from "./components/ChartContextMenu"
 import { useSavedCandles } from "./util/savedCandles"
@@ -301,31 +302,41 @@ export default function App() {
       </header>
       <div className="app-body">
         <main className="app-main">
-          <ChartView
-            key={`${market.symbol}-${interval}`}
-            symbol={market.symbol}
-            interval={interval}
-            session={showSession}
-            pivotOptions={pivotOptions.options}
-            rangeSelection={{ start: rangeStart, end: rangeEnd }}
-            onChartClick={onChartClick}
-            onChartContextMenu={(time, x, y, candle) => {
-              if (time !== null) setCtxMenu({ time, x, y, candle })
-            }}
-          />
-          {replayActive && (
-            <PlaybackControls
-              snap={s}
-              onPlay={() => engine.play()}
-              onPause={() => engine.pause()}
-              onStepForward={() => void engine.stepForward()}
-              onStepBack={() => engine.stepBack()}
-              onRestart={() => void engine.restart()}
-              onStop={() => void engine.stop()}
-              onSpeed={sp => engine.setSpeed(sp)}
-              onAutoResume={v => engine.setAutoResume(v)}
+          {/* The playback strip anchors to the chart area, not the widget below. */}
+          <div className="chart-area">
+            <ChartView
+              key={`${market.symbol}-${interval}`}
+              symbol={market.symbol}
+              interval={interval}
+              baseAsset={market.baseAsset}
+              session={showSession}
+              pivotOptions={pivotOptions.options}
+              rangeSelection={{ start: rangeStart, end: rangeEnd }}
+              onChartClick={onChartClick}
+              onChartContextMenu={(time, x, y, candle) => {
+                if (time !== null) setCtxMenu({ time, x, y, candle })
+              }}
             />
-          )}
+            {replayActive && (
+              <PlaybackControls
+                snap={s}
+                onPlay={() => engine.play()}
+                onPause={() => engine.pause()}
+                onStepForward={() => void engine.stepForward()}
+                onStepBack={() => engine.stepBack()}
+                onRestart={() => void engine.restart()}
+                onStop={() => void engine.stop()}
+                onSpeed={sp => engine.setSpeed(sp)}
+                onAutoResume={v => engine.setAutoResume(v)}
+              />
+            )}
+          </div>
+          <OverviewWidget
+            snap={s}
+            market={market.symbol}
+            baseAsset={market.baseAsset}
+            onLoadSession={id => void engine.loadSession(id)}
+          />
         </main>
         {panelOpen && (
           <BacktestPanel
@@ -353,7 +364,6 @@ export default function App() {
               }
             }}
             onStop={() => void engine.stop()}
-            onLoadSession={id => void engine.loadSession(id)}
           />
         )}
       </div>

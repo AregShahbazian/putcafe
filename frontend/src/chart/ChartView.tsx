@@ -15,6 +15,7 @@ import {
 } from "lightweight-charts"
 import { fetchKlines, KLINE_LIMIT, type Candle } from "../binance/api"
 import { bot, type Pivot, type PivotOptions, type PivotSimResult, type Trade } from "../api/backend"
+import { ordersAt } from "../util/orders"
 import { RangeHighlight, type RangeSelection } from "./RangeHighlight"
 import { PivotMarkers } from "./PivotMarkers"
 import { registerChartHandle } from "../debug/bridge"
@@ -27,7 +28,14 @@ const PIVOT_HIGH = "#f0a431"
 const PIVOT_LOW = "#42a5f5"
 const REVERSE = "#f0a431"
 const ENTRY_LINE = "#b2b5be"
+// trading-terminal's open-order line colors (buy/profit side vs sell/stop side).
+const BUY_ORDER = "#43B581"
+const SELL_ORDER = "#F15959"
 const LOAD_MORE_THRESHOLD = 50
+
+const fmtQty = (n: number) => n.toLocaleString("en-US", { maximumFractionDigits: 6 })
+const fmtPx = (n: number) => n.toLocaleString("en-US", { maximumFractionDigits: 2 })
+const fmtPct = (n: number) => `${n >= 0 ? "+" : ""}${n.toFixed(2)}%`
 
 export interface SessionView {
   candles: Candle[]
@@ -42,6 +50,7 @@ export interface SessionView {
 interface Props {
   symbol: string
   interval: string
+  baseAsset: string
   session: SessionView | null
   pivotOptions: PivotOptions
   rangeSelection: RangeSelection
@@ -106,6 +115,7 @@ function Legend({ candle }: { candle: Candle | null }) {
 export default function ChartView({
   symbol,
   interval,
+  baseAsset,
   session,
   pivotOptions,
   rangeSelection,
@@ -401,7 +411,10 @@ export default function ChartView({
     )
   }, [session, livePivots])
 
-  // Pivot bracket lines (entry / SL / TP) for the position open at the cursor.
+  // Order lines, Trading-terminal-style (clear-then-redraw): every order open at the
+  // cursor becomes a dashed price line — armed entry stops while flat, and the
+  // open position's TP/SL bracket (labels carry qty + the % from entry). The
+  // position itself keeps a neutral entry line.
   useEffect(() => {
     const series = candleSeriesRef.current
     if (!series) return
@@ -409,19 +422,33 @@ export default function ChartView({
     priceLinesRef.current = []
     if (!session?.pivotSim || session.upTo === 0) return
     const cutoff = session.candles[session.upTo - 1].time
-    // The trade entered at/before the cursor and not yet exited (or exiting later).
-    const open = session.pivotSim.trades.find(
-      t => t.entryTime <= cutoff && (t.exitTime === null || t.exitTime > cutoff),
-    )
-    if (!open) return
     const add = (price: number, color: string, title: string) =>
       priceLinesRef.current.push(
         series.createPriceLine({ price, color, lineWidth: 1, lineStyle: LineStyle.Dashed, axisLabelVisible: true, title }),
       )
-    add(open.entryPrice, ENTRY_LINE, `Entry ${open.side}`)
-    add(open.slPrice, DOWN, "SL")
-    add(open.tpPrice, UP, "TP")
-  }, [session])
+    // The trade entered at/before the cursor and not yet exited (or exiting later).
+    const open = session.pivotSim.trades.find(
+      t => t.entryTime <= cutoff && (t.exitTime === null || t.exitTime > cutoff),
+    )
+    if (open) {
+      add(
+        open.entryPrice,
+        ENTRY_LINE,
+        `${open.side === "long" ? "Long" : "Short"} ${fmtQty(open.qty)} ${baseAsset} @ ${fmtPx(open.entryPrice)}`,
+      )
+    }
+    for (const { order: o, status } of ordersAt(session.pivotSim.orders ?? [], cutoff)) {
+      if (status !== "open") continue
+      if (o.role === "entry") {
+        add(o.price, o.side === "buy" ? BUY_ORDER : SELL_ORDER,
+          `${o.side === "buy" ? "Buy" : "Sell"} stop ${fmtQty(o.qty)} ${baseAsset}`)
+      } else if (o.role === "tp") {
+        add(o.price, BUY_ORDER, `TP ${fmtQty(o.qty)} ${baseAsset} ${o.pct !== null ? fmtPct(o.pct) : ""}`)
+      } else if (o.role === "sl") {
+        add(o.price, SELL_ORDER, `SL ${fmtQty(o.qty)} ${baseAsset} ${o.pct !== null ? fmtPct(o.pct) : ""}`)
+      }
+    }
+  }, [session, baseAsset])
 
   // Backtest range highlight (live + session).
   useEffect(() => {

@@ -52,6 +52,42 @@ def simulate(candles: list[dict], pivot_options, params) -> dict:
     last_exit_time = -1
     wins = losses = 0
 
+    # Orders ledger: every order the strategy "places" (armed entry stops, the
+    # TP/SL bracket, reverse market exits), with its full lifecycle.
+    orders: list[dict] = []
+    armed: dict[str, dict | None] = {"buy": None, "sell": None}
+
+    def make_order(role: str, otype: str, side: str, price: float, qty: float,
+                   t: int, pct: float | None = None) -> dict:
+        o = {
+            "id": len(orders), "role": role, "type": otype, "side": side,
+            "price": price, "qty": qty, "pct": pct, "createdAt": t,
+            "status": "open", "filledAt": None, "fillPrice": None,
+            "cancelledAt": None, "tradeIdx": None,
+        }
+        orders.append(o)
+        return o
+
+    def fill_order(o: dict, price: float, t: int):
+        o["status"] = "filled"
+        o["filledAt"] = t
+        o["fillPrice"] = price
+
+    def cancel_order(o: dict | None, t: int):
+        if o is not None and o["status"] == "open":
+            o["status"] = "cancelled"
+            o["cancelledAt"] = t
+
+    def sync_armed(side: str, price: float | None, t: int):
+        """Keep the armed entry stop in step with the gated pivot: a moved level
+        cancels + recreates, a vanished one cancels."""
+        cur = armed[side]
+        if cur is not None and (price is None or cur["price"] != price):
+            cancel_order(cur, t)
+            armed[side] = None
+        if price is not None and armed[side] is None:
+            armed[side] = make_order("entry", "stop_market", side, price, notional / price, t)
+
     def fee_of(price: float) -> float:
         return notional * TAKER_FEE if fees else 0.0
 
@@ -62,18 +98,35 @@ def simulate(candles: list[dict], pivot_options, params) -> dict:
 
     def open_pos(side: str, level: float, candle: dict, fresh: bool = False):
         nonlocal pos
+        t = candle["time"]
         buy = side == "long"
         # Gap-aware stop fill: a candle opening past the stop fills at the open.
         raw = max(level, candle["open"]) if buy else min(level, candle["open"])
         entry = fill(raw, buy)
         sl_price, tp_price = _bracket(side, entry, sl_pct, ratio)
         qty = notional / entry
+        # Fill the armed stop that triggered (a reverse entry has none — its
+        # stop-market order materializes and fills on the reversal candle);
+        # the opposite armed stop dies with the flat state.
+        entry_side = "buy" if buy else "sell"
+        entry_order = armed[entry_side]
+        if entry_order is None:
+            entry_order = make_order("entry", "stop_market", entry_side, level, qty, t)
+        entry_order["qty"] = qty
+        fill_order(entry_order, entry, t)
+        armed[entry_side] = None
+        cancel_order(armed["buy" if not buy else "sell"], t)
+        armed["buy" if not buy else "sell"] = None
+        pct_of = lambda price: (price - entry) / entry * 100.0
+        tp_order = make_order("tp", "limit", "sell" if buy else "buy", tp_price, qty, t, pct_of(tp_price))
+        sl_order = make_order("sl", "stop_market", "sell" if buy else "buy", sl_price, qty, t, pct_of(sl_price))
         pos = {
-            "side": side, "entryTime": candle["time"], "entryPrice": entry,
+            "side": side, "entryTime": t, "entryPrice": entry,
             "qty": qty, "slPrice": sl_price, "tpPrice": tp_price,
             "feePaid": fee_of(entry),
+            "_orders": {"entry": entry_order, "tp": tp_order, "sl": sl_order},
             # A reverse-opened position is evaluated only from the next candle.
-            "_fresh": candle["time"] if fresh else None,
+            "_fresh": t if fresh else None,
         }
 
     def close_pos(level: float, reason: str, candle: dict):
@@ -103,7 +156,26 @@ def simulate(candles: list[dict], pivot_options, params) -> dict:
             "qty": pos["qty"], "slPrice": pos["slPrice"], "tpPrice": pos["tpPrice"],
             "pnl": pnl, "feePaid": pos["feePaid"] + exit_fee,
         })
-        last_exit_time = candle["time"]
+        # Resolve the bracket: the exit reason fills its order, the other leg is
+        # cancelled; a reverse cancels both and closes with a market order.
+        t = candle["time"]
+        po = pos["_orders"]
+        if reason == "tp":
+            fill_order(po["tp"], exit_px, t)
+            cancel_order(po["sl"], t)
+        elif reason == "sl":
+            fill_order(po["sl"], exit_px, t)
+            cancel_order(po["tp"], t)
+        else:  # reverse
+            cancel_order(po["tp"], t)
+            cancel_order(po["sl"], t)
+            exit_order = make_order("exit", "market", "buy" if buy else "sell", exit_px, pos["qty"], t)
+            fill_order(exit_order, exit_px, t)
+            po["exit"] = exit_order
+        idx = len(trades) - 1
+        for o in po.values():
+            o["tradeIdx"] = idx
+        last_exit_time = t
         pos = None
 
     for candle in candles:
@@ -116,6 +188,14 @@ def simulate(candles: list[dict], pivot_options, params) -> dict:
             else:
                 last_low = p
             ci += 1
+
+        # While flat, the armed entry stops mirror the gated pivots (the same
+        # levels the entry checks below use; pivots only change between candles).
+        if pos is None:
+            hi = last_high if last_high and last_high["confirmedAt"] > last_exit_time else None
+            lo = last_low if last_low and last_low["confirmedAt"] > last_exit_time else None
+            sync_armed("buy", hi["price"] if hi else None, t)
+            sync_armed("sell", lo["price"] if lo else None, t)
 
         for extreme in _path(candle):
             if pos is not None and pos.get("_fresh") == t:
@@ -159,11 +239,15 @@ def simulate(candles: list[dict], pivot_options, params) -> dict:
             "qty": pos["qty"], "slPrice": pos["slPrice"], "tpPrice": pos["tpPrice"],
             "pnl": None, "feePaid": pos["feePaid"],
         })
+        # Still-open position: entry is filled, the bracket stays open.
+        for o in pos["_orders"].values():
+            o["tradeIdx"] = len(trades) - 1
 
     realized = sum(t["pnl"] for t in trades if t["pnl"] is not None)
     return {
         "pivots": detected if pivot_options.enabled else None,
         "trades": trades,
+        "orders": orders,
         "equity": equity,
         "realizedPnl": realized,
         "wins": wins,
