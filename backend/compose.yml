@@ -1,0 +1,42 @@
+# Putcafe API stack — runs on the VPS at /root/putcafe/api (deployed by
+# scripts/dev/local/edge/deploy-api.sh). Services bind 127.0.0.1 only; the
+# shared Caddy reverse-proxies /api/positions/* and /api/bot/* to them.
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: putcafe
+      POSTGRES_USER: putcafe
+      POSTGRES_PASSWORD: putcafe
+    volumes:
+      - dbdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U putcafe"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  positions:
+    build: ./positions
+    environment:
+      DATABASE_URL: postgres://putcafe:putcafe@db:5432/putcafe
+    ports:
+      - "127.0.0.1:8101:8101"
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  bot:
+    build: ./bot
+    environment:
+      POSITIONS_URL: http://positions:8101
+    ports:
+      - "127.0.0.1:8102:8102"
+    depends_on:
+      - positions
+    restart: unless-stopped
+
+volumes:
+  dbdata:

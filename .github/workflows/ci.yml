@@ -109,3 +109,27 @@ jobs:
             'mkdir -p /root/putcafe/site/web'
           rsync -az -e "ssh -p ${{ vars.VPS_PORT }}" \
             frontend/dist/ "${{ vars.VPS_USER }}@${{ vars.VPS_HOST }}:/root/putcafe/site/web/"
+
+  # --- Deploy API stack (main only; idempotent, Docker layer cache on the box) -
+  api:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up SSH
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -p "${{ vars.VPS_PORT }}" -H "${{ vars.VPS_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Deploy backend → VPS (compose up --build)
+        run: |
+          ssh -p "${{ vars.VPS_PORT }}" "${{ vars.VPS_USER }}@${{ vars.VPS_HOST }}" \
+            'mkdir -p /root/putcafe/api'
+          rsync -az --delete --exclude node_modules --exclude dist --exclude __pycache__ \
+            -e "ssh -p ${{ vars.VPS_PORT }}" \
+            backend/ "${{ vars.VPS_USER }}@${{ vars.VPS_HOST }}:/root/putcafe/api/"
+          ssh -p "${{ vars.VPS_PORT }}" "${{ vars.VPS_USER }}@${{ vars.VPS_HOST }}" \
+            'cd /root/putcafe/api && docker compose up -d --build --remove-orphans'
