@@ -32,9 +32,16 @@ gh variable set VPS_PORT --body "${VPS_PORT:-22}"
 
 log "creating gated 'production' environment (required reviewer: you)"
 ME="$(gh api user --jq .id)"
-gh api -X PUT "repos/$REPO/environments/production" \
+if gh api -X PUT "repos/$REPO/environments/production" \
   --input - <<EOF >/dev/null
 { "reviewers": [ { "type": "User", "id": $ME } ] }
 EOF
-
-log "done. push main → staging deploy; tag v* → gated prod deploy."
+then
+  log "done. push main → staging deploy; tag v* → gated prod deploy."
+else
+  # Free-plan private repos can't have required reviewers (HTTP 422). Create the
+  # env unprotected so tag jobs still run — but WITHOUT the approval gate.
+  gh api -X PUT "repos/$REPO/environments/production" >/dev/null || true
+  log "WARNING: could not protect 'production' (free-plan private repo?)."
+  log "         tag v* deploys run UNGATED until the repo is public or the plan upgraded."
+fi
