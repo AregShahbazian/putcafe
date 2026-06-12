@@ -7,14 +7,23 @@ export interface AlgoConfig {
   frequencySec: number
 }
 
+/** Pivot-breakout strategy params (the `pivot` algo). `lookback` rides on the
+ * shared PivotOptions; these are the strategy-specific knobs. */
+export interface PivotParams {
+  tpSlRatio: number
+  slCapPct: number
+  quoteAmount: number // notional per position (USDT)
+}
+
 export interface SessionConfig {
   market: string
   interval: string
   startTime: number // unix seconds (first session candle openTime)
   endTime: number // unix seconds (last session candle openTime)
   mode: "replay" | "headless"
-  algo: "dca"
+  algo: "dca" | "pivot"
   algoConfig: AlgoConfig
+  pivotParams?: PivotParams // present when algo === "pivot"
   startingBalance: number
   feesEnabled: boolean
 }
@@ -55,6 +64,29 @@ export interface Pivot {
   type: "high" | "low"
   price: number
   confirmedAt: number
+}
+
+export interface PivotTrade {
+  side: "long" | "short"
+  entryTime: number
+  entryPrice: number
+  exitTime: number | null
+  exitPrice: number | null
+  exitReason: "tp" | "sl" | "reverse" | "open"
+  qty: number
+  slPrice: number
+  tpPrice: number
+  pnl: number | null // realized; null while open
+  feePaid: number
+}
+
+export interface PivotSimResult {
+  pivots: Pivot[] | null
+  trades: PivotTrade[]
+  equity: number
+  realizedPnl: number
+  wins: number
+  losses: number
 }
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
@@ -116,5 +148,14 @@ export const bot = {
     req<{ pivots: Pivot[] | null }>(`/api/bot/analyze`, {
       method: "POST",
       body: JSON.stringify({ candles, pivots }),
+    }),
+  simulate: (
+    candles: Candle[],
+    pivots: PivotOptions,
+    params: PivotParams & { feesEnabled: boolean; startingBalance: number },
+  ) =>
+    req<PivotSimResult>(`/api/bot/simulate`, {
+      method: "POST",
+      body: JSON.stringify({ candles, pivots, params }),
     }),
 }

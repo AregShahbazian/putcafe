@@ -9,7 +9,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from . import dca, pivots
+from . import dca, pivot_strategy, pivots
 
 POSITIONS_URL = os.environ.get("POSITIONS_URL", "http://positions:8101")
 
@@ -57,6 +57,20 @@ class OptionsBody(BaseModel):
 class AnalyzeBody(BaseModel):
     candles: list[Candle]
     pivots: PivotOptions
+
+
+class StrategyParams(BaseModel):
+    tpSlRatio: float = Field(default=2.0, ge=0)
+    slCapPct: float = Field(default=4.0, gt=0)
+    quoteAmount: float = Field(default=100.0, gt=0)
+    feesEnabled: bool = True
+    startingBalance: float = 1000.0
+
+
+class SimulateBody(BaseModel):
+    candles: list[Candle]
+    pivots: PivotOptions
+    params: StrategyParams
 
 
 def session_pivots(s: dict) -> list[dict] | None:
@@ -163,6 +177,15 @@ def analyze(body: AnalyzeBody):
     if not body.pivots.enabled:
         return {"pivots": None}
     return {"pivots": pivots.detect(candles, body.pivots.lookback, body.pivots.alternation)}
+
+
+@app.post("/api/bot/simulate")
+def simulate(body: SimulateBody):
+    """Stateless pivot-breakout backtest over a candle range — returns trades +
+    brackets + equity. The frontend renders it and replay reveals by cursor; no
+    positions-backend involvement (spot/buy-only can't model this)."""
+    candles = [c.model_dump() for c in body.candles]
+    return pivot_strategy.simulate(candles, body.pivots, body.params)
 
 
 @app.delete("/api/bot/sessions/{session_id}")

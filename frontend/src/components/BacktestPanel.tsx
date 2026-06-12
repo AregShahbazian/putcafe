@@ -16,10 +16,15 @@ const FREQUENCIES: Array<{ label: string; sec: number }> = [
 
 export interface PanelConfig {
   mode: "replay" | "headless"
+  algo: "dca" | "pivot"
   quoteAmount: number
   frequencySec: number
   startingBalance: number
   feesEnabled: boolean
+  // Pivot-breakout strategy params (used when algo === "pivot").
+  tpSlRatio: number
+  slCapPct: number
+  positionSize: number
 }
 
 interface Props {
@@ -97,38 +102,91 @@ export default function BacktestPanel(p: Props) {
   const unrealized = s && last && s.avgEntry !== null ? s.baseQty * (last.close - s.avgEntry) : null
   const roi = s && equity !== null ? ((equity - s.startingBalance) / s.startingBalance) * 100 : null
 
+  // Pivot-algo running stats, clipped to the cursor so replay doesn't spoil the result.
+  const cursorT = last ? last.time : 0
+  const sim = snap.pivotSim
+  const pClosed = sim ? sim.trades.filter(t => t.exitTime !== null && t.exitTime <= cursorT) : []
+  const pRealized = pClosed.reduce((a, t) => a + (t.pnl ?? 0), 0)
+  const pWins = pClosed.filter(t => (t.pnl ?? 0) >= 0).length
+  const pOpen = sim?.trades.find(t => t.entryTime <= cursorT && (t.exitTime === null || t.exitTime > cursorT))
+  const pUnreal =
+    pOpen && last ? (pOpen.side === "long" ? 1 : -1) * pOpen.qty * (last.close - pOpen.entryPrice) : null
+  const pEquity = config.startingBalance + pRealized
+  const pRoi = (pRealized / config.startingBalance) * 100
+
   return (
     <aside className="backtest-panel">
       <h3>Backtest</h3>
 
       <label className="field">
         Algorithm
-        <select defaultValue="dca" disabled={active}>
+        <select value={config.algo} disabled={active} onChange={e => set({ algo: e.target.value as PanelConfig["algo"] })}>
           <option value="dca">DCA</option>
+          <option value="pivot">Pivot breakout</option>
         </select>
       </label>
-      <label className="field">
-        Buy amount (USDT)
-        <input
-          type="number"
-          min={1}
-          value={config.quoteAmount}
-          disabled={active}
-          onChange={e => set({ quoteAmount: Number(e.target.value) })}
-        />
-      </label>
-      <label className="field">
-        Frequency
-        <select
-          value={config.frequencySec}
-          disabled={active}
-          onChange={e => set({ frequencySec: Number(e.target.value) })}
-        >
-          {FREQUENCIES.map(f => (
-            <option key={f.sec} value={f.sec}>{f.label}</option>
-          ))}
-        </select>
-      </label>
+      {config.algo === "dca" ? (
+        <>
+          <label className="field">
+            Buy amount (USDT)
+            <input
+              type="number"
+              min={1}
+              value={config.quoteAmount}
+              disabled={active}
+              onChange={e => set({ quoteAmount: Number(e.target.value) })}
+            />
+          </label>
+          <label className="field">
+            Frequency
+            <select
+              value={config.frequencySec}
+              disabled={active}
+              onChange={e => set({ frequencySec: Number(e.target.value) })}
+            >
+              {FREQUENCIES.map(f => (
+                <option key={f.sec} value={f.sec}>{f.label}</option>
+              ))}
+            </select>
+          </label>
+        </>
+      ) : (
+        <>
+          <label className="field">
+            Position size (USDT)
+            <input
+              type="number"
+              min={1}
+              value={config.positionSize}
+              disabled={active}
+              onChange={e => set({ positionSize: Number(e.target.value) })}
+            />
+          </label>
+          {/* Live-tunable during a pivot replay — re-runs the sim. */}
+          <label className="field">
+            TP/SL ratio (e.g. 2 = TP is 2× the SL)
+            <input
+              type="number"
+              min={0.1}
+              step={0.1}
+              value={config.tpSlRatio}
+              disabled={pivotsLocked}
+              onChange={e => set({ tpSlRatio: Number(e.target.value) })}
+            />
+          </label>
+          <label className="field">
+            SL cap (%) — max stop distance
+            <input
+              type="number"
+              min={0.1}
+              step={0.1}
+              value={config.slCapPct}
+              disabled={pivotsLocked}
+              onChange={e => set({ slCapPct: Number(e.target.value) })}
+            />
+          </label>
+        </>
+      )}
       <label className="field">
         Starting balance (USDT)
         <input
@@ -274,6 +332,28 @@ export default function BacktestPanel(p: Props) {
               {roi !== null ? `${roi.toFixed(2)} %` : "—"}
             </dd>
             <dt>Trades</dt><dd>{snap.trades.length}</dd>
+          </dl>
+        </div>
+      )}
+
+      {sim && active && (
+        <div className="results">
+          <h4>Pivot results {snap.status === "finished" ? "(final)" : "(running)"}</h4>
+          <dl>
+            <dt>Position</dt>
+            <dd>{pOpen ? `${pOpen.side} @ ${fmtUsd(pOpen.entryPrice)}` : "flat"}</dd>
+            <dt>Last price</dt><dd>{last ? fmtUsd(last.close) : "—"}</dd>
+            <dt>Unrealized PnL</dt>
+            <dd className={pUnreal !== null && pUnreal < 0 ? "neg" : "pos"}>
+              {pUnreal !== null ? fmtUsd(pUnreal) : "—"} USDT
+            </dd>
+            <dt>Realized PnL</dt>
+            <dd className={pRealized < 0 ? "neg" : "pos"}>{fmtUsd(pRealized)} USDT</dd>
+            <dt>Equity</dt><dd>{fmtUsd(pEquity)} USDT</dd>
+            <dt>ROI</dt>
+            <dd className={pRoi < 0 ? "neg" : "pos"}>{pRoi.toFixed(2)} %</dd>
+            <dt>Closed trades</dt>
+            <dd>{pClosed.length}{pClosed.length > 0 ? ` · ${pWins}W/${pClosed.length - pWins}L` : ""}</dd>
           </dl>
         </div>
       )}
