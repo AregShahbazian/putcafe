@@ -52,6 +52,7 @@ export interface SessionOverrides {
   tpSlRatio?: number
   slCapPct?: number
   positionSize?: number
+  leverage?: number
 }
 
 export interface AppHandle {

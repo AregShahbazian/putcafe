@@ -27,6 +27,7 @@ const DOWN = "#ef5350"
 const PIVOT_HIGH = "#f0a431"
 const PIVOT_LOW = "#42a5f5"
 const REVERSE = "#f0a431"
+const LIQ = "#e040fb"
 const ENTRY_LINE = "#b2b5be"
 // trading-terminal's open-order line colors (buy/profit side vs sell/stop side).
 const BUY_ORDER = "#43B581"
@@ -83,7 +84,8 @@ function pivotMarkers(sim: PivotSimResult, cutoff: number): SeriesMarker<Time>[]
       })
     }
     if (t.exitTime !== null && t.exitReason !== "open" && t.exitTime <= cutoff) {
-      const color = t.exitReason === "tp" ? UP : t.exitReason === "sl" ? DOWN : REVERSE
+      const color =
+        t.exitReason === "tp" ? UP : t.exitReason === "sl" ? DOWN : t.exitReason === "liq" ? LIQ : REVERSE
       out.push({
         time: t.exitTime as UTCTimestamp,
         position: t.side === "long" ? "aboveBar" : "belowBar",
@@ -436,6 +438,8 @@ export default function ChartView({
         ENTRY_LINE,
         `${open.side === "long" ? "Long" : "Short"} ${fmtQty(open.qty)} ${baseAsset} @ ${fmtPx(open.entryPrice)}`,
       )
+      // At ×1 the liq price is effectively unreachable (~0 / ~2× entry) — noise on the scale.
+      if (session.pivotSim.leverage > 1) add(open.liqPrice, LIQ, `Liq ${fmtQty(open.qty)} ${baseAsset}`)
     }
     for (const { order: o, status } of ordersAt(session.pivotSim.orders ?? [], cutoff)) {
       if (status !== "open") continue

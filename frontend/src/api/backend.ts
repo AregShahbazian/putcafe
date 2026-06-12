@@ -12,7 +12,8 @@ export interface AlgoConfig {
 export interface PivotParams {
   tpSlRatio: number
   slCapPct: number
-  quoteAmount: number // notional per position (USDT)
+  quoteAmount: number // isolated margin per position (USDT); notional = margin × leverage
+  leverage: number // ×1–×125
 }
 
 export interface SessionConfig {
@@ -72,11 +73,14 @@ export interface PivotTrade {
   entryPrice: number
   exitTime: number | null
   exitPrice: number | null
-  exitReason: "tp" | "sl" | "reverse" | "open"
+  exitReason: "tp" | "sl" | "reverse" | "liq" | "open"
   qty: number
   slPrice: number
   tpPrice: number
-  pnl: number | null // realized; null while open
+  liqPrice: number
+  notional: number
+  margin: number
+  pnl: number | null // realized; null while open, never below -margin
   feePaid: number
 }
 
@@ -85,7 +89,7 @@ export interface PivotTrade {
  * final state; the at-cursor state is derived in `util/orders.ts`. */
 export interface PivotOrder {
   id: number
-  role: "entry" | "tp" | "sl" | "exit"
+  role: "entry" | "tp" | "sl" | "exit" | "liq"
   type: "stop_market" | "limit" | "market"
   side: "buy" | "sell"
   price: number
@@ -107,6 +111,8 @@ export interface PivotSimResult {
   realizedPnl: number
   wins: number
   losses: number
+  leverage: number
+  bust: boolean // an entry was refused because equity < margin
 }
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {

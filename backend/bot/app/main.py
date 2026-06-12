@@ -63,6 +63,7 @@ class StrategyParams(BaseModel):
     tpSlRatio: float = Field(default=2.0, ge=0)
     slCapPct: float = Field(default=4.0, gt=0)
     quoteAmount: float = Field(default=100.0, gt=0)
+    leverage: int = Field(default=1, ge=1, le=125)
     feesEnabled: bool = True
     startingBalance: float = 1000.0
 

@@ -33,6 +33,7 @@ const DEFAULT_CONFIG: PanelConfig = {
   tpSlRatio: 2,
   slCapPct: 4,
   positionSize: 100,
+  leverage: 1,
 }
 
 export default function App() {
@@ -94,8 +95,9 @@ export default function App() {
       tpSlRatio: config.tpSlRatio,
       slCapPct: config.slCapPct,
       quoteAmount: config.positionSize,
+      leverage: config.leverage,
     })
-  }, [config.tpSlRatio, config.slCapPct, config.positionSize, engine])
+  }, [config.tpSlRatio, config.slCapPct, config.positionSize, config.leverage, engine])
 
   // Escape cancels candle picking.
   useEffect(() => {
@@ -118,7 +120,12 @@ export default function App() {
       algoConfig: { quoteAmount: config.quoteAmount, frequencySec: config.frequencySec },
       pivotParams:
         config.algo === "pivot"
-          ? { tpSlRatio: config.tpSlRatio, slCapPct: config.slCapPct, quoteAmount: config.positionSize }
+          ? {
+              tpSlRatio: config.tpSlRatio,
+              slCapPct: config.slCapPct,
+              quoteAmount: config.positionSize,
+              leverage: config.leverage,
+            }
           : undefined,
       startingBalance: config.startingBalance,
       feesEnabled: config.feesEnabled,
@@ -138,7 +145,8 @@ export default function App() {
     prevKeyRef.current = `${p.market.symbol}-${p.interval}`
     setMarket(p.market)
     setInterval(p.interval)
-    setConfig(p.config)
+    // Merge over defaults so presets saved before new params (e.g. leverage) still load.
+    setConfig({ ...DEFAULT_CONFIG, ...p.config })
     setRangeStart(p.rangeStart)
     setRangeEnd(p.rangeEnd)
     pivotOptions.set(p.pivotOptions)
@@ -174,6 +182,7 @@ export default function App() {
       tpSlRatio: o.tpSlRatio ?? config.tpSlRatio,
       slCapPct: o.slCapPct ?? config.slCapPct,
       positionSize: o.positionSize ?? config.positionSize,
+      leverage: o.leverage ?? config.leverage,
     }
     // Pre-sync the market/interval key (same trick as loadPreset) so the
     // change effect doesn't stop the session we're about to start.
@@ -202,7 +211,7 @@ export default function App() {
       algoConfig: { quoteAmount: cfg.quoteAmount, frequencySec: cfg.frequencySec },
       pivotParams:
         cfg.algo === "pivot"
-          ? { tpSlRatio: cfg.tpSlRatio, slCapPct: cfg.slCapPct, quoteAmount: cfg.positionSize }
+          ? { tpSlRatio: cfg.tpSlRatio, slCapPct: cfg.slCapPct, quoteAmount: cfg.positionSize, leverage: cfg.leverage }
           : undefined,
       startingBalance: cfg.startingBalance,
       feesEnabled: cfg.feesEnabled,

@@ -6,7 +6,14 @@ short on down-break); a TP/SL bracket — SL a fixed % from entry, TP = SL%·rat
 is set at entry; breaking the *current* opposite pivot closes-and-reverses; after a
 TP/SL exit no re-entry until a fresh pivot confirms. One netted position at a
 time. Intra-candle ordering uses the OHLC color heuristic (green O->L->H->C,
-red O->H->L->C). Mirrors the positions-backend fee model so numbers line up.
+red O->H->L->C). Mirrors the positions-backend fee model so numbers line up,
+except TP exits: those are resting limits — fill at their price or better, no
+slippage (maker-fee modelling stays deferred to `pc-futures-orders`).
+
+Futures-style isolated margin: `quoteAmount` is the margin per position,
+notional = margin × leverage; the liquidation price caps a position's loss at
+its margin, and an entry that can't be funded (equity < margin) marks the
+session bust.
 
 This is a backtest simulation only — real resting/bracket orders and a hedge-mode
 futures model are the separate `pc-futures-orders` effort."""
@@ -37,9 +44,13 @@ def simulate(candles: list[dict], pivot_options, params) -> dict:
 
     ratio = float(params.tpSlRatio)
     sl_pct = float(params.slCapPct) / 100.0
-    notional = float(params.quoteAmount)
+    margin = float(params.quoteAmount)
+    leverage = int(getattr(params, "leverage", 1))
+    notional = margin * leverage
     fees = bool(params.feesEnabled)
     equity = float(params.startingBalance)
+    # Adverse move that eats the whole margin, net of entry+exit fees.
+    liq_pct = 1.0 / leverage - (2 * TAKER_FEE if fees else 0.0)
 
     # Pivots indexed by the time they become known, walked alongside the candles.
     by_confirm = sorted(detected, key=lambda p: p["confirmedAt"])
@@ -51,6 +62,7 @@ def simulate(candles: list[dict], pivot_options, params) -> dict:
     pos: dict | None = None
     last_exit_time = -1
     wins = losses = 0
+    bust = False
 
     # Orders ledger: every order the strategy "places" (armed entry stops, the
     # TP/SL bracket, reverse market exits), with its full lifecycle.
@@ -97,13 +109,21 @@ def simulate(candles: list[dict], pivot_options, params) -> dict:
         return price * (1 + SLIPPAGE) if buy else price * (1 - SLIPPAGE)
 
     def open_pos(side: str, level: float, candle: dict, fresh: bool = False):
-        nonlocal pos
+        nonlocal pos, bust
         t = candle["time"]
+        if equity < margin:
+            # The triggered stop can't be funded — the session is done trading.
+            bust = True
+            cancel_order(armed["buy"], t)
+            cancel_order(armed["sell"], t)
+            armed["buy"] = armed["sell"] = None
+            return
         buy = side == "long"
         # Gap-aware stop fill: a candle opening past the stop fills at the open.
         raw = max(level, candle["open"]) if buy else min(level, candle["open"])
         entry = fill(raw, buy)
         sl_price, tp_price = _bracket(side, entry, sl_pct, ratio)
+        liq_price = entry * (1 - liq_pct) if buy else entry * (1 + liq_pct)
         qty = notional / entry
         # Fill the armed stop that triggered (a reverse entry has none — its
         # stop-market order materializes and fills on the reversal candle);
@@ -123,28 +143,36 @@ def simulate(candles: list[dict], pivot_options, params) -> dict:
         pos = {
             "side": side, "entryTime": t, "entryPrice": entry,
             "qty": qty, "slPrice": sl_price, "tpPrice": tp_price,
-            "feePaid": fee_of(entry),
+            "liqPrice": liq_price, "feePaid": fee_of(entry),
             "_orders": {"entry": entry_order, "tp": tp_order, "sl": sl_order},
             # A reverse-opened position is evaluated only from the next candle.
             "_fresh": t if fresh else None,
         }
 
+    def stop_of(p: dict) -> tuple[float, str]:
+        """Effective protective stop: SL or liq, whichever is closer to entry."""
+        if p["side"] == "long":
+            return (p["liqPrice"], "liq") if p["liqPrice"] > p["slPrice"] else (p["slPrice"], "sl")
+        return (p["liqPrice"], "liq") if p["liqPrice"] < p["slPrice"] else (p["slPrice"], "sl")
+
     def close_pos(level: float, reason: str, candle: dict):
         nonlocal pos, equity, last_exit_time, wins, losses
         assert pos is not None
         buy = pos["side"] == "short"  # closing a short buys back
-        raw = level
-        # Gap-aware against the open in the adverse direction.
-        if pos["side"] == "long":
-            raw = min(level, candle["open"]) if candle["open"] < level else level
+        long = pos["side"] == "long"
+        if reason == "tp":
+            # Resting limit: fills at its price or better (favorable gap -> open), no slippage.
+            exit_px = max(level, candle["open"]) if long else min(level, candle["open"])
         else:
-            raw = max(level, candle["open"]) if candle["open"] > level else level
-        exit_px = fill(raw, buy)
+            # Stop-market: fills at the trigger or worse (adverse gap -> open), with slippage.
+            raw = min(level, candle["open"]) if long else max(level, candle["open"])
+            exit_px = fill(raw, buy)
         gross = pos["qty"] * (exit_px - pos["entryPrice"])
         if pos["side"] == "short":
             gross = -gross
         exit_fee = fee_of(exit_px)
-        pnl = gross - pos["feePaid"] - exit_fee
+        # Isolated margin: a position can never lose more than its margin.
+        pnl = max(gross - pos["feePaid"] - exit_fee, -margin)
         equity += pnl
         if pnl >= 0:
             wins += 1
@@ -154,6 +182,7 @@ def simulate(candles: list[dict], pivot_options, params) -> dict:
             "side": pos["side"], "entryTime": pos["entryTime"], "entryPrice": pos["entryPrice"],
             "exitTime": candle["time"], "exitPrice": exit_px, "exitReason": reason,
             "qty": pos["qty"], "slPrice": pos["slPrice"], "tpPrice": pos["tpPrice"],
+            "liqPrice": pos["liqPrice"], "notional": notional, "margin": margin,
             "pnl": pnl, "feePaid": pos["feePaid"] + exit_fee,
         })
         # Resolve the bracket: the exit reason fills its order, the other leg is
@@ -166,6 +195,13 @@ def simulate(candles: list[dict], pivot_options, params) -> dict:
         elif reason == "sl":
             fill_order(po["sl"], exit_px, t)
             cancel_order(po["tp"], t)
+        elif reason == "liq":
+            # Forced market close by the exchange — both bracket legs die.
+            cancel_order(po["tp"], t)
+            cancel_order(po["sl"], t)
+            liq_order = make_order("liq", "market", "buy" if buy else "sell", exit_px, pos["qty"], t)
+            fill_order(liq_order, exit_px, t)
+            po["liq"] = liq_order
         else:  # reverse
             cancel_order(po["tp"], t)
             cancel_order(po["sl"], t)
@@ -191,7 +227,8 @@ def simulate(candles: list[dict], pivot_options, params) -> dict:
 
         # While flat, the armed entry stops mirror the gated pivots (the same
         # levels the entry checks below use; pivots only change between candles).
-        if pos is None:
+        # A bust session arms nothing — it can never fund an entry again.
+        if pos is None and not bust:
             hi = last_high if last_high and last_high["confirmedAt"] > last_exit_time else None
             lo = last_low if last_low and last_low["confirmedAt"] > last_exit_time else None
             sync_armed("buy", hi["price"] if hi else None, t)
@@ -212,23 +249,25 @@ def simulate(candles: list[dict], pivot_options, params) -> dict:
 
             if pos["side"] == "long":
                 if extreme == "low":
-                    # Downside: whichever of SL / opposite-low is higher is hit first.
+                    stop_px, stop_reason = stop_of(pos)
+                    # Downside: whichever of stop / opposite-low is higher is hit first.
                     rev = last_low["price"] if last_low and last_low["price"] < pos["entryPrice"] else None
-                    if rev is not None and rev > pos["slPrice"] and candle["low"] <= rev:
+                    if rev is not None and rev > stop_px and candle["low"] <= rev:
                         close_pos(rev, "reverse", candle)
                         open_pos("short", rev, candle, fresh=True)
-                    elif candle["low"] <= pos["slPrice"]:
-                        close_pos(pos["slPrice"], "sl", candle)
+                    elif candle["low"] <= stop_px:
+                        close_pos(stop_px, stop_reason, candle)
                 elif extreme == "high" and candle["high"] >= pos["tpPrice"]:
                     close_pos(pos["tpPrice"], "tp", candle)
             else:  # short
                 if extreme == "high":
+                    stop_px, stop_reason = stop_of(pos)
                     rev = last_high["price"] if last_high and last_high["price"] > pos["entryPrice"] else None
-                    if rev is not None and rev < pos["slPrice"] and candle["high"] >= rev:
+                    if rev is not None and rev < stop_px and candle["high"] >= rev:
                         close_pos(rev, "reverse", candle)
                         open_pos("long", rev, candle, fresh=True)
-                    elif candle["high"] >= pos["slPrice"]:
-                        close_pos(pos["slPrice"], "sl", candle)
+                    elif candle["high"] >= stop_px:
+                        close_pos(stop_px, stop_reason, candle)
                 elif extreme == "low" and candle["low"] <= pos["tpPrice"]:
                     close_pos(pos["tpPrice"], "tp", candle)
 
@@ -237,6 +276,7 @@ def simulate(candles: list[dict], pivot_options, params) -> dict:
             "side": pos["side"], "entryTime": pos["entryTime"], "entryPrice": pos["entryPrice"],
             "exitTime": None, "exitPrice": None, "exitReason": "open",
             "qty": pos["qty"], "slPrice": pos["slPrice"], "tpPrice": pos["tpPrice"],
+            "liqPrice": pos["liqPrice"], "notional": notional, "margin": margin,
             "pnl": None, "feePaid": pos["feePaid"],
         })
         # Still-open position: entry is filled, the bracket stays open.
@@ -252,4 +292,6 @@ def simulate(candles: list[dict], pivot_options, params) -> dict:
         "realizedPnl": realized,
         "wins": wins,
         "losses": losses,
+        "leverage": leverage,
+        "bust": bust,
     }

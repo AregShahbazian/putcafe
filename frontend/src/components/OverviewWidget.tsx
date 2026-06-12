@@ -23,6 +23,7 @@ const fmtDate = (t: number) =>
 export function orderTypeLabel(o: PivotOrder): string {
   if (o.role === "tp") return `Take profit (${o.pct !== null ? fmtPct(o.pct) : "limit"})`
   if (o.role === "sl") return `Stop loss (${o.pct !== null ? fmtPct(o.pct) : "stop"})`
+  if (o.role === "liq") return "Liquidation"
   if (o.type === "stop_market") return "Stop market"
   return "Market"
 }
