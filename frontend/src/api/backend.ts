@@ -2,15 +2,23 @@ import type { Candle } from "../binance/api"
 
 const BASE = import.meta.env.VITE_API_BASE ?? ""
 
+/** Every algo: dca, pivot, and the indicator algos (signal-driven bracket). */
+export type AlgoName = "dca" | "pivot" | "ma_cross" | "rsi_revert" | "bollinger" | "donchian" | "macd"
+
+/** Indicator-algo knobs (fast/slow/period/oversold/…). Free-form so each algo
+ * carries only its own keys; the backend reads what it needs. */
+export type AlgoParams = Record<string, number | string>
+
 /** Unified run params — futures-only. An algo ignores the knobs it doesn't use
- * (DCA: quoteAmount + frequencySec; pivot: quoteAmount as margin + leverage +
- * tpSlRatio + slCapPct). */
+ * (DCA: quoteAmount + frequencySec; pivot/indicators: quoteAmount as margin +
+ * leverage + tpSlRatio + slCapPct; indicators also read algoParams). */
 export interface FuturesParams {
-  quoteAmount: number // DCA buy size / pivot isolated margin per position (USDT)
+  quoteAmount: number // DCA buy size / isolated margin per position (USDT)
   leverage: number // ×1–×125 (notional = margin × leverage)
   tpSlRatio: number
   slCapPct: number // SL distance from entry (%)
   frequencySec: number // DCA cadence
+  algoParams?: AlgoParams // indicator-algo knobs
 }
 
 export interface SessionConfig {
@@ -19,7 +27,7 @@ export interface SessionConfig {
   startTime: number // unix seconds (first session candle openTime)
   endTime: number // unix seconds (last session candle openTime)
   mode: "replay" | "headless"
-  algo: "dca" | "pivot"
+  algo: AlgoName
   params: FuturesParams
   startingBalance: number
   feesEnabled: boolean
@@ -130,7 +138,7 @@ export interface Session {
   startTime: number
   endTime: number
   mode: "replay" | "headless"
-  algo: "dca" | "pivot"
+  algo: AlgoName
   params: FuturesParams
   startingBalance: number
   feesEnabled: boolean
@@ -175,7 +183,7 @@ export const positions = {
 export const bot = {
   run: (
     candles: Candle[],
-    algo: "dca" | "pivot",
+    algo: AlgoName,
     pivots: PivotOptions,
     params: FuturesParams & { feesEnabled: boolean; startingBalance: number },
   ) =>
