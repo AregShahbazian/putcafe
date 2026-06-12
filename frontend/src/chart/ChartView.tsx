@@ -17,8 +17,8 @@ import { RangeHighlight, type RangeSelection } from "./RangeHighlight"
 
 const UP = "#26a69a"
 const DOWN = "#ef5350"
-const PIVOT_HIGH = "#f0a431"
-const PIVOT_LOW = "#42a5f5"
+const PIVOT_HIGH = "#000000"
+const PIVOT_LOW = "#ffffff"
 const LOAD_MORE_THRESHOLD = 50
 
 export interface SessionView {
