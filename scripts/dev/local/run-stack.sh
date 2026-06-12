@@ -9,10 +9,11 @@
 #   ./scripts/dev/local/run-stack.sh down       # stop + remove the backends
 #   ./scripts/dev/local/run-stack.sh logs       # follow backend logs
 #
-# Ports (bound to 127.0.0.1): positions :8101, bot :8102. The dev server runs
-# with VITE_LOCAL_STACK=1 so Vite proxies /api/positions/* and /api/bot/* to the
-# local containers (same-origin, no VITE_API_BASE). Ctrl-C stops the frontend;
-# the backends stay up — run with `down` to stop them.
+# Ports (bound to 127.0.0.1): positions :8101, bot :8102, frontend :5180 (strict,
+# NOT the default :5173 — avoids colliding with another worktree's dev server).
+# The dev server runs with VITE_LOCAL_STACK=1 so Vite proxies /api/positions/*
+# and /api/bot/* to the local containers (same-origin, no VITE_API_BASE). Ctrl-C
+# stops the frontend; the backends stay up — run with `down` to stop them.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 cd "$ROOT/backend"
@@ -45,5 +46,7 @@ fi
 
 cd "$ROOT/frontend"
 [ -d node_modules ] || { echo "==> installing frontend deps…"; yarn install; }
-echo "==> starting frontend (VITE_LOCAL_STACK) — Ctrl-C stops it; backends stay up ('down' to stop them)."
-exec env VITE_LOCAL_STACK=1 yarn dev
+# Dedicated strict port so this never silently lands on (or collides with) the
+# default :5173 of another worktree's dev server. Fails loudly if 5180 is taken.
+echo "==> frontend → http://localhost:5180/  (VITE_LOCAL_STACK; Ctrl-C stops it, backends stay up — use 'down')."
+exec env VITE_LOCAL_STACK=1 yarn dev --port 5180 --strictPort
