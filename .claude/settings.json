@@ -1,6 +1,14 @@
 {
   "permissions": {
     "allow": [
+      "Bash(./scripts/dev/local/edge/setup.sh *)",
+      "Bash(./scripts/dev/local/edge/setup.sh)",
+      "Bash(./scripts/dev/local/edge/ops.sh *)",
+      "Bash(./scripts/dev/local/edge/deploy.sh *)",
+      "Bash(./scripts/dev/local/edge/deploy.sh)",
+      "Bash(./scripts/dev/local/edge/setup-github.sh)",
+      "Bash(curl *)",
+      "Bash(bash -n *)",
       "mcp__playwright__browser_take_screenshot",
       "mcp__playwright__browser_snapshot",
       "mcp__playwright__browser_console_messages"
