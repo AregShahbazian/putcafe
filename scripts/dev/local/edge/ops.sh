@@ -6,7 +6,8 @@
 #
 # Works before first setup too (password fallback via deploy.conf — see _conn.sh).
 # `health` curls the PUBLIC https://putcafe.<host>/ end-to-end from the laptop.
-# NOTE: start/stop/restart act on the SHARED edge service (orion-web) — affects Orion.
+# NOTE: start/stop/restart act on the SHARED edge (Orion's `edge` compose stack) —
+# affects Orion too.
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 

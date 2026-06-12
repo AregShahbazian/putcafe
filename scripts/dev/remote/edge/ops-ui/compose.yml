@@ -13,6 +13,9 @@ services:
     environment:
       DOZZLE_AUTH_PROVIDER: simple
       DOZZLE_ENABLE_ACTIONS: "true"
+    labels:
+      # Dozzle sidebar group (single-container compose projects don't get one).
+      dev.dozzle.group: ops-ui
     healthcheck:
       test: ["CMD", "/dozzle", "healthcheck"]
       interval: 10s
