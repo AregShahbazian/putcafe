@@ -39,8 +39,9 @@ interface Props {
   onChartContextMenu?: (time: number | null, x: number, y: number, candle: Candle | null) => void
 }
 
-function toSeriesCandle(c: Candle) {
-  return { time: c.time as UTCTimestamp, open: c.open, high: c.high, low: c.low, close: c.close }
+function toSeriesCandle(c: Candle, color?: string) {
+  const bar = { time: c.time as UTCTimestamp, open: c.open, high: c.high, low: c.low, close: c.close }
+  return color ? { ...bar, color, borderColor: color, wickColor: color } : bar
 }
 
 function toVolumeBar(c: Candle) {
@@ -80,6 +81,7 @@ export default function ChartView({
   const sessionActiveRef = useRef(false)
   const lastUpToRef = useRef(0)
   const fitDoneRef = useRef(false)
+  const pivotKeyRef = useRef("")
   const clickRef = useRef(onChartClick)
   const ctxMenuRef = useRef(onChartContextMenu)
   clickRef.current = onChartClick
@@ -177,7 +179,7 @@ export default function ChartView({
 
     const setAll = (candles: Candle[]) => {
       candlesRef.current = candles
-      candleSeries.setData(candles.map(toSeriesCandle))
+      candleSeries.setData(candles.map(c => toSeriesCandle(c)))
       volumeSeries.setData(candles.map(toVolumeBar))
     }
 
@@ -235,21 +237,29 @@ export default function ChartView({
     if (!session) {
       lastUpToRef.current = 0
       fitDoneRef.current = false
+      pivotKeyRef.current = ""
       return
     }
     setLoading(false)
     setError(null)
     const visible = [...session.preCandles, ...session.candles.slice(0, session.upTo)]
+    // Confirmed pivot candles are drawn in the pivot colors; a newly confirmed
+    // (or live-options-changed) pivot lies behind the cursor, so repaint via setData.
+    const cutoff = visible.length > 0 ? visible[visible.length - 1].time : 0
+    const confirmed = session.pivots.filter(pv => pv.confirmedAt <= cutoff)
+    const pivotColors = new Map(confirmed.map(pv => [pv.time, pv.type === "high" ? PIVOT_HIGH : PIVOT_LOW] as [number, string]))
+    const pivotKey = confirmed.map(pv => `${pv.time}${pv.type}`).join()
     const entering = lastUpToRef.current === 0
-    if (visible.length === lastUpToRef.current + 1 && !entering) {
+    if (visible.length === lastUpToRef.current + 1 && !entering && pivotKey === pivotKeyRef.current) {
       const next = visible[visible.length - 1]
       candleSeries.update(toSeriesCandle(next))
       volumeSeries.update(toVolumeBar(next))
     } else {
-      candleSeries.setData(visible.map(toSeriesCandle))
+      candleSeries.setData(visible.map(c => toSeriesCandle(c, pivotColors.get(c.time))))
       volumeSeries.setData(visible.map(toVolumeBar))
     }
     lastUpToRef.current = visible.length
+    pivotKeyRef.current = pivotKey
     candlesRef.current = visible
     if (visible.length > 0) setHovered(visible[visible.length - 1])
 
