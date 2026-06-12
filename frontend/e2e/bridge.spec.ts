@@ -45,10 +45,12 @@ test("console bridge drives a pivot backtest end-to-end", async ({ page }) => {
   // The chart actually drew it: entry marker present, bracket lines up.
   const markers = await page.evaluate(() => window.pc.chart.markers())
   expect(markers.some((m: { time: number }) => m.time === first.entryTime)).toBe(true)
-  const lines = await page.evaluate(() => window.pc.chart.priceLines())
-  expect(lines.map((l: { title: string }) => l.title).sort()).toEqual(
-    [`Entry ${first.side}`, "SL", "TP"].sort(),
-  )
+  // Titles by prefix only — their detail text (qty/price/%) is free to evolve.
+  const lines: { title: string }[] = await page.evaluate(() => window.pc.chart.priceLines())
+  expect(lines).toHaveLength(3)
+  expect(lines.some(l => l.title.startsWith("SL"))).toBe(true)
+  expect(lines.some(l => l.title.startsWith("TP"))).toBe(true)
+  expect(lines.some(l => new RegExp(`^(entry ${first.side}|${first.side})`, "i").test(l.title))).toBe(true)
 
   // Rendered candles stop at the cursor — render matches engine state.
   const rendered = await page.evaluate(() => window.pc.chart.renderedCandles())
