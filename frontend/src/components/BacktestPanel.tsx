@@ -115,21 +115,19 @@ export default function BacktestPanel(p: Props) {
   const pivotsLocked = snap.status === "loading" || (snap.mode === "headless" && snap.status === "playing")
 
   const last = snap.upTo > 0 ? snap.candles[snap.upTo - 1] : null
-  const s = snap.session
-  const equity = s && last ? s.quoteBalance + s.baseQty * last.close : null
-  const unrealized = s && last && s.avgEntry !== null ? s.baseQty * (last.close - s.avgEntry) : null
-  const roi = s && equity !== null ? ((equity - s.startingBalance) / s.startingBalance) * 100 : null
 
-  // Pivot-algo running stats, clipped to the cursor so replay doesn't spoil the result.
+  // Running stats from the snapshot, clipped to the cursor so replay doesn't spoil it.
   const cursorT = last ? last.time : 0
-  const sim = snap.pivotSim
+  const sim = snap.sim
   const pClosed = sim ? sim.trades.filter(t => t.exitTime !== null && t.exitTime <= cursorT) : []
   const pRealized = pClosed.reduce((a, t) => a + (t.pnl ?? 0), 0)
   const pWins = pClosed.filter(t => (t.pnl ?? 0) >= 0).length
   const pLiqs = pClosed.filter(t => t.exitReason === "liq").length
-  const pOpen = sim?.trades.find(t => t.entryTime <= cursorT && (t.exitTime === null || t.exitTime > cursorT))
+  const pOpenSides = sim ? sim.trades.filter(t => t.entryTime <= cursorT && (t.exitTime === null || t.exitTime > cursorT)) : []
   const pUnreal =
-    pOpen && last ? (pOpen.side === "long" ? 1 : -1) * pOpen.qty * (last.close - pOpen.entryPrice) : null
+    last && pOpenSides.length > 0
+      ? pOpenSides.reduce((a, t) => a + (t.side === "long" ? 1 : -1) * t.qty * (last.close - t.entryPrice), 0)
+      : null
   const pEquity = config.startingBalance + pRealized
   const pRoi = (pRealized / config.startingBalance) * 100
 
@@ -363,37 +361,14 @@ export default function BacktestPanel(p: Props) {
 
       {snap.error && <div className="panel-error">{snap.error}</div>}
 
-      {s && active && (
-        <div className="results">
-          <h4>Results {s.status === "finished" ? "(final)" : "(running)"}</h4>
-          <dl>
-            <dt>Balance</dt><dd>{fmtUsd(s.quoteBalance)} USDT</dd>
-            <dt>Position</dt><dd>{s.baseQty.toLocaleString("en-US", { maximumFractionDigits: 8 })}</dd>
-            <dt>Avg entry</dt><dd>{s.avgEntry !== null ? fmtUsd(s.avgEntry) : "—"}</dd>
-            <dt>Last price</dt><dd>{last ? fmtUsd(last.close) : "—"}</dd>
-            <dt>Unrealized PnL</dt>
-            <dd className={unrealized !== null && unrealized < 0 ? "neg" : "pos"}>
-              {unrealized !== null ? fmtUsd(unrealized) : "—"} USDT
-            </dd>
-            <dt>Fees paid</dt><dd>{fmtUsd(s.feesPaid)} USDT</dd>
-            <dt>Equity</dt><dd>{equity !== null ? fmtUsd(equity) : "—"} USDT</dd>
-            <dt>ROI</dt>
-            <dd className={roi !== null && roi < 0 ? "neg" : "pos"}>
-              {roi !== null ? `${roi.toFixed(2)} %` : "—"}
-            </dd>
-            <dt>Trades</dt><dd>{snap.trades.length}</dd>
-          </dl>
-        </div>
-      )}
-
       {sim && active && (
         <div className="results">
-          <h4>Pivot results {snap.status === "finished" ? "(final)" : "(running)"}</h4>
+          <h4>Results {snap.status === "finished" ? "(final)" : "(running)"}</h4>
           <dl>
             <dt>Leverage</dt>
             <dd>×{sim.leverage}</dd>
             <dt>Position</dt>
-            <dd>{pOpen ? `${pOpen.side} @ ${fmtUsd(pOpen.entryPrice)}` : "flat"}</dd>
+            <dd>{pOpenSides.length > 0 ? pOpenSides.map(t => `${t.side} @ ${fmtUsd(t.entryPrice)}`).join(", ") : "flat"}</dd>
             <dt>Last price</dt><dd>{last ? fmtUsd(last.close) : "—"}</dd>
             <dt>Unrealized PnL</dt>
             <dd className={pUnreal !== null && pUnreal < 0 ? "neg" : "pos"}>
@@ -411,7 +386,7 @@ export default function BacktestPanel(p: Props) {
               {pLiqs > 0 ? ` · ${pLiqs} liq` : ""}
             </dd>
           </dl>
-          {pEquity < config.positionSize && (
+          {sim.bust && (
             <div className="panel-error">Bust — equity can no longer fund the margin, no further entries.</div>
           )}
         </div>

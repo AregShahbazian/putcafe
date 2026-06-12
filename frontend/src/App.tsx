@@ -13,7 +13,17 @@ import ChartContextMenu, { type ContextMenuState } from "./components/ChartConte
 import { useSavedCandles } from "./util/savedCandles"
 import { usePivotOptions } from "./util/pivotOptions"
 import { usePresets, type Preset } from "./util/presets"
-import type { PivotOptions } from "./api/backend"
+import type { FuturesParams, PivotOptions } from "./api/backend"
+
+/** Map the panel's UI config to the engine's unified run params. DCA uses
+ * `quoteAmount` as its buy size; pivot uses `positionSize` as isolated margin. */
+const paramsOf = (cfg: PanelConfig): FuturesParams => ({
+  quoteAmount: cfg.algo === "dca" ? cfg.quoteAmount : cfg.positionSize,
+  leverage: cfg.leverage,
+  tpSlRatio: cfg.tpSlRatio,
+  slCapPct: cfg.slCapPct,
+  frequencySec: cfg.frequencySec,
+})
 import {
   bridgeSnapshot,
   installBridge,
@@ -90,15 +100,10 @@ export default function App() {
     void engine.setPivotOptions(pivotOptions.options)
   }, [pivotOptions.options, engine])
 
-  // Pivot-strategy params: live control during a pivot replay (re-runs the sim).
+  // Run params: live control during a replay (re-runs the snapshot in place).
   useEffect(() => {
-    void engine.setPivotParams({
-      tpSlRatio: config.tpSlRatio,
-      slCapPct: config.slCapPct,
-      quoteAmount: config.positionSize,
-      leverage: config.leverage,
-    })
-  }, [config.tpSlRatio, config.slCapPct, config.positionSize, config.leverage, engine])
+    void engine.setParams(paramsOf(config))
+  }, [config.algo, config.quoteAmount, config.frequencySec, config.tpSlRatio, config.slCapPct, config.positionSize, config.leverage, engine])
 
   // Escape cancels candle picking.
   useEffect(() => {
@@ -118,16 +123,7 @@ export default function App() {
       endTime: end,
       mode,
       algo: config.algo,
-      algoConfig: { quoteAmount: config.quoteAmount, frequencySec: config.frequencySec },
-      pivotParams:
-        config.algo === "pivot"
-          ? {
-              tpSlRatio: config.tpSlRatio,
-              slCapPct: config.slCapPct,
-              quoteAmount: config.positionSize,
-              leverage: config.leverage,
-            }
-          : undefined,
+      params: paramsOf(config),
       startingBalance: config.startingBalance,
       feesEnabled: config.feesEnabled,
     }
@@ -226,11 +222,7 @@ export default function App() {
       endTime: o.end!,
       mode: cfg.mode,
       algo: cfg.algo,
-      algoConfig: { quoteAmount: cfg.quoteAmount, frequencySec: cfg.frequencySec },
-      pivotParams:
-        cfg.algo === "pivot"
-          ? { tpSlRatio: cfg.tpSlRatio, slCapPct: cfg.slCapPct, quoteAmount: cfg.positionSize, leverage: cfg.leverage }
-          : undefined,
+      params: paramsOf(cfg),
       startingBalance: cfg.startingBalance,
       feesEnabled: cfg.feesEnabled,
     })
@@ -269,17 +261,15 @@ export default function App() {
 
   const replayActive =
     s.mode === "replay" && ["ready", "playing", "paused", "finished"].includes(s.status)
-  // Pivot sims have no positions-backend session, so they're carried by pivotSim.
-  const hasRun = s.session !== null || s.pivotSim !== null
+  const hasRun = s.sim !== null
   const showSession: SessionView | null =
     hasRun && (replayActive || (s.mode === "headless" && s.status === "finished"))
       ? {
           candles: s.candles,
           preCandles: s.preCandles,
           upTo: s.upTo,
-          trades: s.trades,
           pivots: s.pivots,
-          pivotSim: s.pivotSim,
+          sim: s.sim,
           fitRange: s.mode === "headless" && s.status === "finished",
         }
       : null

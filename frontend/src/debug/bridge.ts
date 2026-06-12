@@ -159,18 +159,15 @@ export function bridgeSnapshot(s: EngineSnapshot) {
     if (s.status !== prev.status)
       pushEvent("status", { from: prev.status, to: s.status, cursorTime: cursorTime(s) })
     if (s.error && s.error !== prev.error) pushEvent("error", { message: s.error })
-    // DCA trades append to the snapshot as they fill.
-    for (let i = prev.trades.length; i < s.trades.length; i++)
-      pushEvent("trade", { kind: "dca", trade: s.trades[i] })
-    // Pivot-sim trades are pre-computed; they "happen" as the cursor passes
-    // their entry/exit candle.
-    if (s.pivotSim && prev.candles === s.candles && s.upTo > prev.upTo) {
+    // Snapshot trades are pre-computed; they "happen" as the cursor passes
+    // their entry/exit candle (every algo).
+    if (s.sim && prev.candles === s.candles && s.upTo > prev.upTo) {
       const passed = new Set(s.candles.slice(prev.upTo, s.upTo).map(c => c.time))
-      for (const t of s.pivotSim.trades) {
+      for (const t of s.sim.trades) {
         if (passed.has(t.entryTime))
-          pushEvent("trade", { kind: "pivot", phase: "entry", side: t.side, time: t.entryTime, price: t.entryPrice })
+          pushEvent("trade", { kind: s.session?.algo ?? "?", phase: "entry", side: t.side, time: t.entryTime, price: t.entryPrice })
         if (t.exitTime !== null && passed.has(t.exitTime))
-          pushEvent("trade", { kind: "pivot", phase: "exit", side: t.side, time: t.exitTime, price: t.exitPrice, reason: t.exitReason })
+          pushEvent("trade", { kind: s.session?.algo ?? "?", phase: "exit", side: t.side, time: t.exitTime, price: t.exitPrice, reason: t.exitReason })
       }
     }
     if (s.pivots.length !== prev.pivots.length) pushEvent("pivots", { count: s.pivots.length })
@@ -199,8 +196,8 @@ export interface SnapshotSummary {
   autoResume: boolean
   progress: number
   error: string | null
-  session: Pick<Session, "id" | "status" | "quoteBalance" | "baseQty" | "avgEntry" | "feesPaid"> | null
-  sim: { equity: number; realizedPnl: number; wins: number; losses: number; tradeCount: number; open: boolean } | null
+  session: Pick<Session, "id" | "status" | "algo" | "leverage"> | null
+  sim: { equity: number; realizedPnl: number; wins: number; losses: number; tradeCount: number; bust: boolean; open: boolean } | null
 }
 
 function summary(s: EngineSnapshot = snap()): SnapshotSummary {
@@ -212,30 +209,24 @@ function summary(s: EngineSnapshot = snap()): SnapshotSummary {
     preCandleCount: s.preCandles.length,
     upTo: s.upTo,
     cursorTime: cursorTime(s),
-    tradeCount: s.pivotSim ? s.pivotSim.trades.length : s.trades.length,
+    tradeCount: s.sim ? s.sim.trades.length : 0,
     pivotCount: s.pivots.length,
     speed: s.speed,
     autoResume: s.autoResume,
     progress: s.progress,
     error: s.error,
     session: sess
-      ? {
-          id: sess.id,
-          status: sess.status,
-          quoteBalance: sess.quoteBalance,
-          baseQty: sess.baseQty,
-          avgEntry: sess.avgEntry,
-          feesPaid: sess.feesPaid,
-        }
+      ? { id: sess.id, status: sess.status, algo: sess.algo, leverage: sess.leverage }
       : null,
-    sim: s.pivotSim
+    sim: s.sim
       ? {
-          equity: s.pivotSim.equity,
-          realizedPnl: s.pivotSim.realizedPnl,
-          wins: s.pivotSim.wins,
-          losses: s.pivotSim.losses,
-          tradeCount: s.pivotSim.trades.length,
-          open: s.pivotSim.trades.some(t => t.exitReason === "open"),
+          equity: s.sim.equity,
+          realizedPnl: s.sim.realizedPnl,
+          wins: s.sim.wins,
+          losses: s.sim.losses,
+          tradeCount: s.sim.trades.length,
+          bust: s.sim.bust,
+          open: s.sim.trades.some(t => t.exitReason === "open"),
         }
       : null,
   }
@@ -463,54 +454,41 @@ const near = (a: number | null | undefined, b: number | null | undefined) => {
   return Math.abs(a - b) <= Math.max(1e-6, Math.abs(a) * 1e-6)
 }
 
-/** Frontend↔backend cross-check for the active (or given) backend session;
- * internal invariant check for pivot sims (which have no backend session). */
+/** Internal-invariant check on a futures snapshot — the current in-memory one,
+ * or a persisted session fetched by id (its snapshot is the same engine output).
+ * Spot is gone, so there is no separate fill-math cross-check. */
 async function verify(sessionId?: string): Promise<{ ok: boolean; kind: "sim" | "backend"; mismatches: Mismatch[] }> {
   const s = snap()
   const mismatches: Mismatch[] = []
   const mm = (field: string, frontend: unknown, backend: unknown) => mismatches.push({ field, frontend, backend })
 
-  if (!sessionId && s.pivotSim) {
-    const sim = s.pivotSim
-    const closed = sim.trades.filter(t => t.exitReason !== "open")
-    if (sim.wins + sim.losses !== closed.length) mm("sim.wins+losses = closed trades", sim.wins + sim.losses, closed.length)
-    const startingBalance = requireApp().getUi().config.startingBalance
-    if (!near(sim.equity, startingBalance + sim.realizedPnl))
-      mm("sim.equity = startingBalance + realizedPnl", sim.equity, startingBalance + sim.realizedPnl)
-    sim.trades.forEach((t, i) => {
+  let sim = s.sim
+  let startingBalance = requireApp().getUi().config.startingBalance
+  let kind: "sim" | "backend" = "sim"
+  if (sessionId) {
+    const detail = await positions.getSession(sessionId)
+    sim = detail.snapshot
+    startingBalance = detail.startingBalance
+    kind = "backend"
+  }
+  if (!sim) throw err("bad-state", "nothing to verify — no snapshot loaded")
+
+  const closed = sim.trades.filter(t => t.exitReason !== "open")
+  if (sim.wins + sim.losses !== closed.length) mm("wins+losses = closed trades", sim.wins + sim.losses, closed.length)
+  if (!near(sim.equity, startingBalance + sim.realizedPnl))
+    mm("equity = startingBalance + realizedPnl", sim.equity, startingBalance + sim.realizedPnl)
+  sim.trades.forEach((t, i) => {
+    // Bracket sides only apply to bracketed algos (pivot); DCA has null SL/TP.
+    if (t.slPrice !== null && t.tpPrice !== null) {
       const ok =
         t.side === "long"
           ? t.slPrice < t.entryPrice && t.tpPrice > t.entryPrice
           : t.slPrice > t.entryPrice && t.tpPrice < t.entryPrice
-      if (!ok) mm(`sim.trades[${i}].bracket sides (${t.side})`, { entry: t.entryPrice, sl: t.slPrice, tp: t.tpPrice }, "sl/tp on opposite sides of entry")
-      if (t.exitTime !== null && t.exitTime < t.entryTime) mm(`sim.trades[${i}].exit before entry`, t.exitTime, t.entryTime)
-    })
-    return { ok: mismatches.length === 0, kind: "sim", mismatches }
-  }
-
-  const id = sessionId ?? s.session?.id
-  if (!id) throw err("bad-state", "nothing to verify — no active backend session and no pivot sim")
-  const detail = await positions.getSession(id)
-  // Backend internal consistency (fill math from the positions service).
-  const sumQuote = detail.trades.reduce((a, t) => a + t.quoteAmount, 0)
-  const sumFee = detail.trades.reduce((a, t) => a + t.fee, 0)
-  const sumBase = detail.trades.reduce((a, t) => a + t.baseQty, 0)
-  const sumCost = detail.trades.reduce((a, t) => a + t.baseQty * t.price, 0)
-  if (!near(detail.feesPaid, sumFee)) mm("backend.feesPaid = Σfee", detail.feesPaid, sumFee)
-  if (!near(detail.baseQty, sumBase)) mm("backend.baseQty = ΣbaseQty", detail.baseQty, sumBase)
-  if (!near(detail.quoteBalance, detail.startingBalance - sumQuote))
-    mm("backend.quoteBalance = starting − Σquote", detail.quoteBalance, detail.startingBalance - sumQuote)
-  if (sumBase > 0 && !near(detail.avgEntry, sumCost / sumBase))
-    mm("backend.avgEntry = Σ(base·price)/Σbase", detail.avgEntry, sumCost / sumBase)
-  // Frontend mirror vs backend, when the snapshot carries this very session.
-  if (s.session?.id === id) {
-    if (s.trades.length !== detail.trades.length) mm("trades.length", s.trades.length, detail.trades.length)
-    if (!near(s.session.quoteBalance, detail.quoteBalance)) mm("quoteBalance", s.session.quoteBalance, detail.quoteBalance)
-    if (!near(s.session.baseQty, detail.baseQty)) mm("baseQty", s.session.baseQty, detail.baseQty)
-    if (!near(s.session.avgEntry, detail.avgEntry)) mm("avgEntry", s.session.avgEntry, detail.avgEntry)
-    if (!near(s.session.feesPaid, detail.feesPaid)) mm("feesPaid", s.session.feesPaid, detail.feesPaid)
-  }
-  return { ok: mismatches.length === 0, kind: "backend", mismatches }
+      if (!ok) mm(`trades[${i}].bracket sides (${t.side})`, { entry: t.entryPrice, sl: t.slPrice, tp: t.tpPrice }, "sl/tp on opposite sides of entry")
+    }
+    if (t.exitTime !== null && t.exitTime < t.entryTime) mm(`trades[${i}].exit before entry`, t.exitTime, t.entryTime)
+  })
+  return { ok: mismatches.length === 0, kind, mismatches }
 }
 
 // ---------------------------------------------------------------- chart settle
@@ -538,7 +516,7 @@ async function settled<T>(read: (c: ChartHandle) => T, timeoutMs = 5_000): Promi
 function dump(t?: number) {
   const s = snap()
   const ui = requireApp().getUi()
-  const sim = s.pivotSim
+  const sim = s.sim
   const norm = t === undefined ? undefined : normTime(t)
   const trades =
     sim && norm !== undefined ? sim.trades.filter(tr => tr.entryTime === norm || tr.exitTime === norm) : sim?.trades
@@ -690,12 +668,11 @@ function buildPc() {
         const time = normTime(t)
         return [...s.preCandles, ...s.candles].find(c => c.time === time) ?? null
       }),
-      trades: cmd("state.trades", async (): Promise<unknown[]> => {
-        const s = snap()
-        return s.pivotSim ? s.pivotSim.trades : s.trades
-      }),
+      trades: cmd("state.trades", async (): Promise<unknown[]> => snap().sim?.trades ?? []),
       pivots: cmd("state.pivots", async () => snap().pivots),
-      sim: cmd("state.sim", async () => snap().pivotSim),
+      sim: cmd("state.sim", async () => snap().sim),
+      orders: cmd("state.orders", async () => snap().sim?.orders ?? []),
+      positions: cmd("state.positions", async () => snap().sim?.positions ?? null),
       config: cmd("state.config", async () => {
         const ui = requireApp().getUi()
         return {
