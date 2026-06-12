@@ -14,7 +14,7 @@ import {
   type UTCTimestamp,
 } from "lightweight-charts"
 import { fetchKlines, KLINE_LIMIT, type Candle } from "../binance/api"
-import { bot, type Pivot, type PivotOptions, type PivotSimResult, type Trade } from "../api/backend"
+import { bot, type FuturesSnapshot, type Pivot, type PivotOptions } from "../api/backend"
 import { ordersAt } from "../util/orders"
 import { RangeHighlight, type RangeSelection } from "./RangeHighlight"
 import { PivotMarkers } from "./PivotMarkers"
@@ -42,9 +42,8 @@ export interface SessionView {
   candles: Candle[]
   preCandles: Candle[]
   upTo: number
-  trades: Trade[]
   pivots: Pivot[]
-  pivotSim: PivotSimResult | null // present for the `pivot` algo
+  sim: FuturesSnapshot | null
   fitRange: boolean
 }
 
@@ -68,8 +67,8 @@ function toVolumeBar(c: Candle) {
   return { time: c.time as UTCTimestamp, value: c.volume, color: c.close >= c.open ? UP : DOWN }
 }
 
-// Pivot-algo entry (arrow) + exit (circle) markers, clipped to the cursor.
-function pivotMarkers(sim: PivotSimResult, cutoff: number): SeriesMarker<Time>[] {
+// Trade entry (arrow) + exit (circle) markers, clipped to the cursor.
+function tradeMarkers(sim: FuturesSnapshot, cutoff: number): SeriesMarker<Time>[] {
   const out: SeriesMarker<Time>[] = []
   for (const t of sim.trades) {
     if (t.entryTime <= cutoff) {
@@ -390,19 +389,8 @@ export default function ChartView({
       return
     }
     const cutoff = session.upTo > 0 ? session.candles[session.upTo - 1].time : 0
-    // Pivot algo: entry/exit markers from the sim; DCA: spot-buy markers.
-    const trades: SeriesMarker<Time>[] = session.pivotSim
-      ? pivotMarkers(session.pivotSim, cutoff)
-      : session.trades
-          .filter(t => t.time <= cutoff)
-          .map(t => ({
-            time: t.time as UTCTimestamp,
-            position: "belowBar",
-            color: UP,
-            shape: "arrowUp",
-            text: `B ${t.quoteAmount}`,
-            size: TRADE_MARKER_SIZE,
-          }))
+    // Entry/exit markers from the snapshot (every algo).
+    const trades: SeriesMarker<Time>[] = session.sim ? tradeMarkers(session.sim, cutoff) : []
     trades.sort((a, b) => (a.time as number) - (b.time as number))
     lastMarkersRef.current = trades
     markers.setMarkers(trades)
@@ -422,26 +410,25 @@ export default function ChartView({
     if (!series) return
     for (const line of priceLinesRef.current) series.removePriceLine(line)
     priceLinesRef.current = []
-    if (!session?.pivotSim || session.upTo === 0) return
+    if (!session?.sim || session.upTo === 0) return
     const cutoff = session.candles[session.upTo - 1].time
     const add = (price: number, color: string, title: string) =>
       priceLinesRef.current.push(
         series.createPriceLine({ price, color, lineWidth: 1, lineStyle: LineStyle.Dashed, axisLabelVisible: true, title }),
       )
-    // The trade entered at/before the cursor and not yet exited (or exiting later).
-    const open = session.pivotSim.trades.find(
+    // Each open position side at the cursor gets a neutral entry line (+ liq above ×1).
+    for (const open of session.sim.trades.filter(
       t => t.entryTime <= cutoff && (t.exitTime === null || t.exitTime > cutoff),
-    )
-    if (open) {
+    )) {
       add(
         open.entryPrice,
         ENTRY_LINE,
         `${open.side === "long" ? "Long" : "Short"} ${fmtQty(open.qty)} ${baseAsset} @ ${fmtPx(open.entryPrice)}`,
       )
       // At ×1 the liq price is effectively unreachable (~0 / ~2× entry) — noise on the scale.
-      if (session.pivotSim.leverage > 1) add(open.liqPrice, LIQ, `Liq ${fmtQty(open.qty)} ${baseAsset}`)
+      if (open.leverage > 1) add(open.liqPrice, LIQ, `Liq ${fmtQty(open.qty)} ${baseAsset}`)
     }
-    for (const { order: o, status } of ordersAt(session.pivotSim.orders ?? [], cutoff)) {
+    for (const { order: o, status } of ordersAt(session.sim.orders ?? [], cutoff)) {
       if (status !== "open") continue
       if (o.role === "entry") {
         add(o.price, o.side === "buy" ? BUY_ORDER : SELL_ORDER,

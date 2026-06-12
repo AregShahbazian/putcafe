@@ -2,18 +2,15 @@ import type { Candle } from "../binance/api"
 
 const BASE = import.meta.env.VITE_API_BASE ?? ""
 
-export interface AlgoConfig {
-  quoteAmount: number
-  frequencySec: number
-}
-
-/** Pivot-breakout strategy params (the `pivot` algo). `lookback` rides on the
- * shared PivotOptions; these are the strategy-specific knobs. */
-export interface PivotParams {
+/** Unified run params — futures-only. An algo ignores the knobs it doesn't use
+ * (DCA: quoteAmount + frequencySec; pivot: quoteAmount as margin + leverage +
+ * tpSlRatio + slCapPct). */
+export interface FuturesParams {
+  quoteAmount: number // DCA buy size / pivot isolated margin per position (USDT)
+  leverage: number // ×1–×125 (notional = margin × leverage)
   tpSlRatio: number
-  slCapPct: number
-  quoteAmount: number // isolated margin per position (USDT); notional = margin × leverage
-  leverage: number // ×1–×125
+  slCapPct: number // SL distance from entry (%)
+  frequencySec: number // DCA cadence
 }
 
 export interface SessionConfig {
@@ -23,35 +20,9 @@ export interface SessionConfig {
   endTime: number // unix seconds (last session candle openTime)
   mode: "replay" | "headless"
   algo: "dca" | "pivot"
-  algoConfig: AlgoConfig
-  pivotParams?: PivotParams // present when algo === "pivot"
+  params: FuturesParams
   startingBalance: number
   feesEnabled: boolean
-}
-
-export interface Trade {
-  time: number
-  side: "buy"
-  price: number
-  baseQty: number
-  quoteAmount: number
-  fee: number
-}
-
-export interface Session extends SessionConfig {
-  id: string
-  createdAt: string
-  status: "active" | "finished"
-  quoteBalance: number
-  baseQty: number
-  avgEntry: number | null
-  feesPaid: number
-}
-
-export interface Decision {
-  side: "buy"
-  type: "market"
-  quoteAmount: number
 }
 
 export interface PivotOptions {
@@ -67,6 +38,7 @@ export interface Pivot {
   confirmedAt: number
 }
 
+/** A futures trade (a closed position side, or an open one with null exits). */
 export interface PivotTrade {
   side: "long" | "short"
   entryTime: number
@@ -75,23 +47,26 @@ export interface PivotTrade {
   exitPrice: number | null
   exitReason: "tp" | "sl" | "reverse" | "liq" | "open"
   qty: number
-  slPrice: number
-  tpPrice: number
+  slPrice: number | null // null for bracket-less algos (DCA)
+  tpPrice: number | null
   liqPrice: number
   notional: number
   margin: number
+  leverage: number
   pnl: number | null // realized; null while open, never below -margin
   feePaid: number
 }
 
-/** One order in the sim's ledger: armed entry stops, the TP/SL bracket legs,
- * and reverse market exits — with full lifecycle timestamps. Status is the
- * final state; the at-cursor state is derived in `util/orders.ts`. */
+/** One order in the ledger: entry stops, the reduce-only TP/SL bracket legs,
+ * reverse/liq market exits — full lifecycle. `status` is the final state; the
+ * at-cursor state is derived in `util/orders.ts`. */
 export interface PivotOrder {
   id: number
   role: "entry" | "tp" | "sl" | "exit" | "liq"
-  type: "stop_market" | "limit" | "market"
+  type: "stop_market" | "stop_limit" | "limit" | "market"
   side: "buy" | "sell"
+  positionSide: "long" | "short"
+  reduceOnly: boolean
   price: number
   qty: number
   pct: number | null // tp/sl distance from entry, signed %
@@ -103,22 +78,69 @@ export interface PivotOrder {
   tradeIdx: number | null
 }
 
-export interface PivotSimResult {
+export interface FuturesPosition {
+  side: "long" | "short"
+  entryTime: number
+  entryPrice: number
+  qty: number
+  margin: number
+  leverage: number
+  notional: number
+  liqPrice: number
+  slPrice: number | null
+  tpPrice: number | null
+  feePaid: number
+}
+
+export interface Positions {
+  long: FuturesPosition | null
+  short: FuturesPosition | null
+}
+
+export interface FuturesEvent {
+  time: number
+  kind: "open" | "add" | "tp" | "sl" | "reverse" | "liq" | "bust"
+  side?: "long" | "short"
+  price?: number
+  qty?: number
+  pnl?: number
+}
+
+/** The engine snapshot — single source of truth for every algo. */
+export interface FuturesSnapshot {
   pivots: Pivot[] | null
+  positions: Positions
   trades: PivotTrade[]
   orders: PivotOrder[]
+  events: FuturesEvent[]
   equity: number
   realizedPnl: number
   wins: number
   losses: number
   leverage: number
-  bust: boolean // an entry was refused because equity < margin
+  bust: boolean // an entry was refused because the free balance < margin
+}
+
+/** Persisted session metadata (the snapshot rides along on getSession). */
+export interface Session {
+  id: string
+  createdAt: string
+  market: string
+  interval: string
+  startTime: number
+  endTime: number
+  mode: "replay" | "headless"
+  algo: "dca" | "pivot"
+  params: FuturesParams
+  startingBalance: number
+  feesEnabled: boolean
+  leverage: number
+  status: "active" | "finished"
 }
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     ...init,
-    // Only when a body exists — Fastify 400s empty bodies typed as JSON.
     headers: init?.body !== undefined ? { "Content-Type": "application/json" } : undefined,
   })
   if (!res.ok) {
@@ -130,16 +152,17 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>
 }
 
+export interface CreateSessionBody extends SessionConfig {
+  leverage: number
+  snapshot: FuturesSnapshot
+}
+
 export const positions = {
-  createSession: (config: SessionConfig) =>
-    req<Session>("/api/positions/sessions", { method: "POST", body: JSON.stringify(config) }),
+  createSession: (body: CreateSessionBody) =>
+    req<Session>("/api/positions/sessions", { method: "POST", body: JSON.stringify(body) }),
   listSessions: () => req<Session[]>("/api/positions/sessions"),
-  getSession: (id: string) => req<Session & { trades: Trade[] }>(`/api/positions/sessions/${id}`),
-  order: (id: string, order: { time: number; side: "buy"; quoteAmount: number; price: number }) =>
-    req<Session & { filled: boolean; trade: Trade }>(`/api/positions/sessions/${id}/orders`, {
-      method: "POST",
-      body: JSON.stringify(order),
-    }),
+  getSession: (id: string) =>
+    req<Session & { snapshot: FuturesSnapshot }>(`/api/positions/sessions/${id}`),
   finish: (id: string) => req<{ ok: true }>(`/api/positions/sessions/${id}/finish`, { method: "POST" }),
   remove: (id: string) => req<{ ok: true }>(`/api/positions/sessions/${id}`, { method: "DELETE" }),
   clearSessions: (exceptId?: string) =>
@@ -150,38 +173,19 @@ export const positions = {
 }
 
 export const bot = {
-  seed: (id: string, body: { algo: "dca"; config: AlgoConfig; candles: Candle[]; options?: PivotOptions }) =>
-    req<{ ok: true; pivots: Pivot[] | null }>(`/api/bot/sessions/${id}/seed`, {
+  run: (
+    candles: Candle[],
+    algo: "dca" | "pivot",
+    pivots: PivotOptions,
+    params: FuturesParams & { feesEnabled: boolean; startingBalance: number },
+  ) =>
+    req<FuturesSnapshot>("/api/bot/futures/run", {
       method: "POST",
-      body: JSON.stringify(body),
-    }),
-  step: (id: string, candle: Candle) =>
-    req<{ decisions: Decision[]; pivots: Pivot[] | null }>(`/api/bot/sessions/${id}/step`, {
-      method: "POST",
-      body: JSON.stringify({ candle }),
-    }),
-  run: (id: string, candles: Candle[]) =>
-    req<{ steps: number; trades: number; pivots: Pivot[] | null }>(`/api/bot/sessions/${id}/run`, {
-      method: "POST",
-      body: JSON.stringify({ candles }),
-    }),
-  setOptions: (id: string, pivots: PivotOptions) =>
-    req<{ ok: true; pivots: Pivot[] | null }>(`/api/bot/sessions/${id}/options`, {
-      method: "PUT",
-      body: JSON.stringify({ pivots }),
+      body: JSON.stringify({ candles, algo, pivots, params }),
     }),
   analyze: (candles: Candle[], pivots: PivotOptions) =>
-    req<{ pivots: Pivot[] | null }>(`/api/bot/analyze`, {
+    req<{ pivots: Pivot[] | null }>("/api/bot/analyze", {
       method: "POST",
       body: JSON.stringify({ candles, pivots }),
-    }),
-  simulate: (
-    candles: Candle[],
-    pivots: PivotOptions,
-    params: PivotParams & { feesEnabled: boolean; startingBalance: number },
-  ) =>
-    req<PivotSimResult>(`/api/bot/simulate`, {
-      method: "POST",
-      body: JSON.stringify({ candles, pivots, params }),
     }),
 }

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react"
-import { positions, type PivotOrder, type Session } from "../api/backend"
+import { positions, type PivotOrder, type PivotTrade, type Session } from "../api/backend"
 import type { EngineSnapshot } from "../backtest/engine"
-import { dcaOrders, ordersAt, type OrderAt } from "../util/orders"
+import { ordersAt, type OrderAt } from "../util/orders"
 
 type Tab = "positions" | "orders" | "sessions"
 type OrderFilter = "open" | "closed"
@@ -61,61 +61,40 @@ export default function OverviewWidget(p: Props) {
   const last = snap.upTo > 0 ? snap.candles[snap.upTo - 1] : null
   const cursorT = last ? last.time : 0
 
-  // Position at the cursor: the pivot trade spanning it, or the DCA session's
-  // accumulated spot position (its state already tracks the replay cursor).
-  const sim = snap.pivotSim
-  const pivotOpen = sim?.trades.find(t => t.entryTime <= cursorT && (t.exitTime === null || t.exitTime > cursorT))
-  const dcaPos = !sim && snap.session && snap.session.baseQty > 0 ? snap.session : null
+  // Open position sides at the cursor — hedge-mode, so long and/or short. Each
+  // is a trade row spanning the cursor (no lookahead; step-back re-reveals).
+  const sim = snap.sim
+  const openSides: PivotTrade[] = sim
+    ? sim.trades.filter(t => t.entryTime <= cursorT && (t.exitTime === null || t.exitTime > cursorT))
+    : []
 
-  // `?? []` tolerates a deployed bot that predates the orders ledger.
-  const orders: OrderAt[] = sim
-    ? ordersAt(sim.orders ?? [], cursorT)
-    : ordersAt(dcaOrders(snap.trades), cursorT)
+  const orders: OrderAt[] = sim ? ordersAt(sim.orders ?? [], cursorT) : []
   const filtered = orders.filter(o => (filter === "open" ? o.status === "open" : o.status !== "open"))
   const openCount = orders.filter(o => o.status === "open").length
 
   const sideCls = (side: string) => (side === "buy" || side === "long" ? "pos" : "neg")
   const pnlCls = (n: number) => (n < 0 ? "neg" : "pos")
 
-  const positionRow = () => {
-    if (pivotOpen && last) {
-      const dir = pivotOpen.side === "long" ? 1 : -1
-      const pnl = dir * pivotOpen.qty * (last.close - pivotOpen.entryPrice)
-      const pct = dir * ((last.close - pivotOpen.entryPrice) / pivotOpen.entryPrice) * 100
-      return (
-        <tr>
-          <td>{fmtDate(pivotOpen.entryTime)}</td>
-          <td>{p.market}</td>
-          <td className={sideCls(pivotOpen.side)}>{pivotOpen.side === "long" ? "Long" : "Short"}</td>
-          <td>{fmtQty(pivotOpen.qty)} {p.baseAsset}</td>
-          <td>{fmtPrice(pivotOpen.entryPrice)}</td>
-          <td>{fmtPrice(last.close)}</td>
-          <td className="neg">{fmtPrice(pivotOpen.slPrice)}</td>
-          <td className="pos">{fmtPrice(pivotOpen.tpPrice)}</td>
-          <td className={pnlCls(pnl)}>{fmtPrice(pnl)}</td>
-          <td className={pnlCls(pct)}>{fmtPct(pct)}</td>
-        </tr>
-      )
-    }
-    if (dcaPos && last && dcaPos.avgEntry !== null) {
-      const pnl = dcaPos.baseQty * (last.close - dcaPos.avgEntry)
-      const pct = ((last.close - dcaPos.avgEntry) / dcaPos.avgEntry) * 100
-      return (
-        <tr>
-          <td>{fmtDate(dcaPos.startTime)}</td>
-          <td>{dcaPos.market}</td>
-          <td className="pos">Long</td>
-          <td>{fmtQty(dcaPos.baseQty)} {p.baseAsset}</td>
-          <td>{fmtPrice(dcaPos.avgEntry)}</td>
-          <td>{fmtPrice(last.close)}</td>
-          <td>—</td>
-          <td>—</td>
-          <td className={pnlCls(pnl)}>{fmtPrice(pnl)}</td>
-          <td className={pnlCls(pct)}>{fmtPct(pct)}</td>
-        </tr>
-      )
-    }
-    return null
+  const positionRow = (pos: PivotTrade) => {
+    if (!last) return null
+    const dir = pos.side === "long" ? 1 : -1
+    const pnl = dir * pos.qty * (last.close - pos.entryPrice)
+    const pct = dir * ((last.close - pos.entryPrice) / pos.entryPrice) * 100
+    const lev = pos.leverage > 1 ? `×${pos.leverage}` : ""
+    return (
+      <tr key={pos.side + pos.entryTime}>
+        <td>{fmtDate(pos.entryTime)}</td>
+        <td>{p.market}</td>
+        <td className={sideCls(pos.side)}>{pos.side === "long" ? "Long" : "Short"} {lev}</td>
+        <td>{fmtQty(pos.qty)} {p.baseAsset}</td>
+        <td>{fmtPrice(pos.entryPrice)}</td>
+        <td>{fmtPrice(last.close)}</td>
+        <td className="neg">{pos.slPrice !== null ? fmtPrice(pos.slPrice) : "—"}</td>
+        <td className="pos">{pos.tpPrice !== null ? fmtPrice(pos.tpPrice) : "—"}</td>
+        <td className={pnlCls(pnl)}>{fmtPrice(pnl)}</td>
+        <td className={pnlCls(pct)}>{fmtPct(pct)}</td>
+      </tr>
+    )
   }
 
   return (
@@ -151,9 +130,9 @@ export default function OverviewWidget(p: Props) {
               </tr>
             </thead>
             <tbody>
-              {positionRow() ?? (
-                <tr><td className="ow-empty" colSpan={10}>No open position</td></tr>
-              )}
+              {openSides.length > 0
+                ? openSides.map(positionRow)
+                : <tr><td className="ow-empty" colSpan={10}>No open position</td></tr>}
             </tbody>
           </table>
         )}

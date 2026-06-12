@@ -1,4 +1,4 @@
-import type { PivotOrder, Trade } from "../api/backend"
+import type { PivotOrder } from "../api/backend"
 
 /** An order's state as of the replay cursor — `null` means not created yet
  * (hidden). An order whose fill/cancel lies beyond the cursor reads as open,
@@ -23,24 +23,4 @@ export function ordersAt(orders: PivotOrder[], cursorT: number): OrderAt[] {
     if (status !== null) out.push({ order, status })
   }
   return out.sort((a, b) => b.order.createdAt - a.order.createdAt)
-}
-
-/** DCA spot buys shaped as ledger orders (market, instantly filled) so the
- * Orders tab renders both algos through one path. */
-export function dcaOrders(trades: Trade[]): PivotOrder[] {
-  return trades.map((t, i) => ({
-    id: i,
-    role: "entry",
-    type: "market",
-    side: "buy",
-    price: t.price,
-    qty: t.baseQty,
-    pct: null,
-    createdAt: t.time,
-    status: "filled",
-    filledAt: t.time,
-    fillPrice: t.price,
-    cancelledAt: null,
-    tradeIdx: i,
-  }))
 }
