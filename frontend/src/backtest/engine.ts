@@ -1,5 +1,6 @@
 import { fetchKlines, fetchKlinesRange, type Candle } from "../binance/api"
-import { bot, positions, type Session, type SessionConfig, type Trade } from "../api/backend"
+import { bot, positions, type Pivot, type PivotOptions, type Session, type SessionConfig, type Trade } from "../api/backend"
+import { DEFAULT_PIVOT_OPTIONS } from "../util/pivotOptions"
 
 export type EngineStatus = "idle" | "loading" | "ready" | "playing" | "paused" | "finished"
 
@@ -10,6 +11,7 @@ export interface EngineSnapshot {
   preCandles: Candle[] // pre-start history, rendered as chart context
   upTo: number // rendered candle count (within candles)
   trades: Trade[]
+  pivots: Pivot[]
   session: Session | null
   speed: number // candles per second
   autoResume: boolean
@@ -27,6 +29,7 @@ const idleSnapshot = (): EngineSnapshot => ({
   preCandles: [],
   upTo: 0,
   trades: [],
+  pivots: [],
   session: null,
   speed: 5,
   autoResume: true,
@@ -41,6 +44,7 @@ const idleSnapshot = (): EngineSnapshot => ({
 export class BacktestEngine {
   private snap = idleSnapshot()
   private config: SessionConfig | null = null
+  private pivotOptions: PivotOptions = DEFAULT_PIVOT_OPTIONS
   private seedHistory: Candle[] = []
   private processedUpTo = 0 // candles already sent through bot/orders
   private timer: ReturnType<typeof setTimeout> | null = null
@@ -70,7 +74,12 @@ export class BacktestEngine {
       this.seedHistory = await fetchKlines(config.market, config.interval, config.startTime * 1000 - 1)
       this.seedHistory = this.seedHistory.slice(-SEED_HISTORY)
       const session = await positions.createSession(config)
-      await bot.seed(session.id, { algo: config.algo, config: config.algoConfig, candles: this.seedHistory })
+      const seeded = await bot.seed(session.id, {
+        algo: config.algo,
+        config: config.algoConfig,
+        candles: this.seedHistory,
+        options: this.pivotOptions,
+      })
       if (this.aborted) return
       this.emit({
         status: "ready",
@@ -78,6 +87,7 @@ export class BacktestEngine {
         preCandles: this.seedHistory,
         upTo: 1,
         trades: [],
+        pivots: seeded.pivots ?? [],
         session,
         progress: 0,
       })
@@ -97,7 +107,8 @@ export class BacktestEngine {
     let significant = false
 
     if (idx >= this.processedUpTo) {
-      const decisions = await this.botStep(session.id, candle)
+      const { decisions, pivots } = await this.botStep(session.id, candle)
+      if (pivots !== null) this.snap = { ...this.snap, pivots }
       for (const d of decisions) {
         try {
           const res = await positions.order(session.id, {
@@ -128,17 +139,23 @@ export class BacktestEngine {
   /** Bot step with one re-seed retry (bot restarts lose in-memory support data). */
   private async botStep(sessionId: string, candle: Candle) {
     try {
-      return (await bot.step(sessionId, candle)).decisions
+      return await bot.step(sessionId, candle)
     } catch (e) {
       if ((e as { status?: number }).status !== 409 || !this.config) throw e
-      const processed = this.snap.candles.slice(0, this.snap.upTo)
-      await bot.seed(sessionId, {
-        algo: this.config.algo,
-        config: this.config.algoConfig,
-        candles: [...this.seedHistory, ...processed],
-      })
-      return (await bot.step(sessionId, candle)).decisions
+      await this.reseed(sessionId)
+      return await bot.step(sessionId, candle)
     }
+  }
+
+  private async reseed(sessionId: string) {
+    if (!this.config) return
+    const processed = this.snap.candles.slice(0, this.snap.upTo)
+    await bot.seed(sessionId, {
+      algo: this.config.algo,
+      config: this.config.algoConfig,
+      candles: [...this.seedHistory, ...processed],
+      options: this.pivotOptions,
+    })
   }
 
   /** Headless runs entirely server-side in one call (bot loops in Python, hits
@@ -148,13 +165,14 @@ export class BacktestEngine {
     if (!session) return
     this.emit({ status: "playing", progress: 0 })
     try {
-      await bot.run(session.id, this.snap.candles)
+      const result = await bot.run(session.id, this.snap.candles)
       if (this.aborted) return
       const detail = await positions.getSession(session.id)
       this.processedUpTo = this.snap.candles.length
       this.snap = {
         ...this.snap,
         trades: detail.trades,
+        pivots: result.pivots ?? this.snap.pivots,
         session: detail,
         upTo: this.snap.candles.length,
       }
@@ -256,6 +274,10 @@ export class BacktestEngine {
       const detail = await positions.getSession(id)
       const candles = await fetchKlinesRange(detail.market, detail.interval, detail.startTime, detail.endTime)
       const pre = (await fetchKlines(detail.market, detail.interval, detail.startTime * 1000 - 1)).slice(-SEED_HISTORY)
+      // The bot's in-memory session is gone for persisted sessions — analyze statelessly.
+      const pivots = this.pivotOptions.enabled
+        ? ((await bot.analyze([...pre, ...candles], this.pivotOptions).catch(() => null))?.pivots ?? [])
+        : []
       this.emit({
         status: "finished",
         mode: "headless", // render-results shape: no playback controls
@@ -263,6 +285,7 @@ export class BacktestEngine {
         preCandles: pre,
         upTo: candles.length,
         trades: detail.trades,
+        pivots,
         session: detail,
         progress: 1,
       })
@@ -285,6 +308,37 @@ export class BacktestEngine {
 
   setSpeed(speed: number) {
     this.emit({ speed })
+  }
+
+  /** Live control: persists as the engine's current options; mid-replay the bot
+   * recomputes over the candles it has seen, finished/loaded views re-analyze. */
+  async setPivotOptions(options: PivotOptions) {
+    this.pivotOptions = options
+    const { session, status, mode } = this.snap
+    if (!options.enabled) {
+      if (this.snap.pivots.length > 0) this.emit({ pivots: [] })
+      return
+    }
+    try {
+      if (session && mode === "replay" && (status === "ready" || status === "playing" || status === "paused")) {
+        let res
+        try {
+          res = await bot.setOptions(session.id, options)
+        } catch (e) {
+          if ((e as { status?: number }).status !== 409 || !this.config) throw e
+          await this.reseed(session.id)
+          res = await bot.setOptions(session.id, options)
+        }
+        this.emit({ pivots: res.pivots ?? [] })
+      } else if (status === "finished") {
+        const candles = [...this.snap.preCandles, ...this.snap.candles]
+        if (candles.length === 0) return
+        const res = await bot.analyze(candles, options)
+        this.emit({ pivots: res.pivots ?? [] })
+      }
+    } catch (e) {
+      this.emit({ error: e instanceof Error ? e.message : String(e) })
+    }
   }
 
   setAutoResume(autoResume: boolean) {

@@ -7,16 +7,16 @@ import os
 import httpx
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
-from . import dca
+from . import dca, pivots
 
 POSITIONS_URL = os.environ.get("POSITIONS_URL", "http://positions:8101")
 
 app = FastAPI()
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
-# session_id -> {"algo": str, "config": dict, "candles": list[dict]}
+# session_id -> {"algo": str, "config": dict, "candles": list[dict], "pivots": dict}
 sessions: dict[str, dict] = {}
 
 
@@ -29,10 +29,17 @@ class Candle(BaseModel):
     volume: float
 
 
+class PivotOptions(BaseModel):
+    enabled: bool = False
+    lookback: int = Field(default=3, ge=1)
+    alternation: bool = True
+
+
 class SeedBody(BaseModel):
     algo: str
     config: dict
     candles: list[Candle]
+    options: PivotOptions | None = None
 
 
 class StepBody(BaseModel):
@@ -41,6 +48,22 @@ class StepBody(BaseModel):
 
 class RunBody(BaseModel):
     candles: list[Candle]
+
+
+class OptionsBody(BaseModel):
+    pivots: PivotOptions
+
+
+class AnalyzeBody(BaseModel):
+    candles: list[Candle]
+    pivots: PivotOptions
+
+
+def session_pivots(s: dict) -> list[dict] | None:
+    opts = s["pivots"]
+    if not opts.enabled:
+        return None
+    return pivots.detect(s["candles"], opts.lookback, opts.alternation)
 
 
 @app.get("/api/bot/health")
@@ -52,12 +75,14 @@ def health():
 def seed(session_id: str, body: SeedBody):
     if body.algo != "dca":
         raise HTTPException(status_code=400, detail="unknown algo")
-    sessions[session_id] = {
+    s = {
         "algo": body.algo,
         "config": body.config,
         "candles": [c.model_dump() for c in body.candles],
+        "pivots": body.options or PivotOptions(),
     }
-    return {"ok": True, "historySize": len(body.candles)}
+    sessions[session_id] = s
+    return {"ok": True, "historySize": len(body.candles), "pivots": session_pivots(s)}
 
 
 @app.post("/api/bot/sessions/{session_id}/step")
@@ -75,7 +100,7 @@ async def step(session_id: str, body: StepBody):
     state = r.json()
 
     decisions = dca.decide(s["config"], candle, state.get("lastTradeTime"))
-    return {"decisions": decisions}
+    return {"decisions": decisions, "pivots": session_pivots(s)}
 
 
 @app.post("/api/bot/sessions/{session_id}/run")
@@ -116,7 +141,28 @@ async def run(session_id: str, body: RunBody):
                     last_trade_time = candle["time"]
                     trades += 1
 
-    return {"steps": len(body.candles), "trades": trades}
+    return {"steps": len(body.candles), "trades": trades, "pivots": session_pivots(s)}
+
+
+@app.put("/api/bot/sessions/{session_id}/options")
+def set_options(session_id: str, body: OptionsBody):
+    """Replay live-control: swap pivot options mid-session, recompute over
+    the candles seen so far."""
+    s = sessions.get(session_id)
+    if s is None:
+        raise HTTPException(status_code=409, detail="not_seeded")
+    s["pivots"] = body.pivots
+    return {"ok": True, "pivots": session_pivots(s)}
+
+
+@app.post("/api/bot/analyze")
+def analyze(body: AnalyzeBody):
+    """Stateless pivot analysis — for loaded finished sessions, whose bot-side
+    in-memory session is long gone."""
+    candles = [c.model_dump() for c in body.candles]
+    if not body.pivots.enabled:
+        return {"pivots": None}
+    return {"pivots": pivots.detect(candles, body.pivots.lookback, body.pivots.alternation)}
 
 
 @app.delete("/api/bot/sessions/{session_id}")

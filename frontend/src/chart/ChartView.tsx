@@ -12,11 +12,13 @@ import {
   type UTCTimestamp,
 } from "lightweight-charts"
 import { fetchKlines, KLINE_LIMIT, type Candle } from "../binance/api"
-import type { Trade } from "../api/backend"
+import type { Pivot, Trade } from "../api/backend"
 import { RangeHighlight, type RangeSelection } from "./RangeHighlight"
 
 const UP = "#26a69a"
 const DOWN = "#ef5350"
+const PIVOT_HIGH = "#f0a431"
+const PIVOT_LOW = "#42a5f5"
 const LOAD_MORE_THRESHOLD = 50
 
 export interface SessionView {
@@ -24,6 +26,7 @@ export interface SessionView {
   preCandles: Candle[]
   upTo: number
   trades: Trade[]
+  pivots: Pivot[]
   fitRange: boolean
 }
 
@@ -268,7 +271,8 @@ export default function ChartView({
     }
   }, [session])
 
-  // Trade markers, clipped to the replay cursor.
+  // Trade + pivot markers, clipped to the replay cursor. A pivot only shows once
+  // the cursor reaches the candle that confirmed it (no-lookahead honesty).
   useEffect(() => {
     const markers = markersRef.current
     if (!markers) return
@@ -277,7 +281,7 @@ export default function ChartView({
       return
     }
     const cutoff = session.upTo > 0 ? session.candles[session.upTo - 1].time : 0
-    const ms: SeriesMarker<Time>[] = session.trades
+    const trades: SeriesMarker<Time>[] = session.trades
       .filter(t => t.time <= cutoff)
       .map(t => ({
         time: t.time as UTCTimestamp,
@@ -286,7 +290,15 @@ export default function ChartView({
         shape: "arrowUp",
         text: `B ${t.quoteAmount}`,
       }))
-    markers.setMarkers(ms)
+    const pivots: SeriesMarker<Time>[] = session.pivots
+      .filter(pv => pv.confirmedAt <= cutoff)
+      .map(pv => ({
+        time: pv.time as UTCTimestamp,
+        position: pv.type === "high" ? "aboveBar" : "belowBar",
+        color: pv.type === "high" ? PIVOT_HIGH : PIVOT_LOW,
+        shape: pv.type === "high" ? "arrowDown" : "arrowUp",
+      }))
+    markers.setMarkers([...trades, ...pivots].sort((a, b) => (a.time as number) - (b.time as number)))
   }, [session])
 
   // Backtest range highlight (live + session).

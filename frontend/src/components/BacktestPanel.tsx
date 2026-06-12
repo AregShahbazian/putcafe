@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react"
-import { positions, type Session } from "../api/backend"
+import { positions, type PivotOptions, type Session } from "../api/backend"
 import type { EngineSnapshot } from "../backtest/engine"
 import { fetchKlinesRange } from "../binance/api"
 import { downloadJson, fileStamp } from "../util/download"
@@ -38,6 +38,8 @@ interface Props {
   savedCandles: SavedCandle[]
   onRemoveSaved: (index: number) => void
   onClearSaved: () => void
+  pivotOptions: PivotOptions
+  onPivotOptions: (patch: Partial<PivotOptions>) => void
 }
 
 const fmtDate = (t?: number) =>
@@ -85,6 +87,9 @@ export default function BacktestPanel(p: Props) {
   }
 
   const set = (patch: Partial<PanelConfig>) => p.onConfig({ ...config, ...patch })
+
+  const po = p.pivotOptions
+  const pivotsLocked = snap.status === "loading" || (snap.mode === "headless" && snap.status === "playing")
 
   const last = snap.upTo > 0 ? snap.candles[snap.upTo - 1] : null
   const s = snap.session
@@ -156,6 +161,45 @@ export default function BacktestPanel(p: Props) {
             {m === "replay" ? "Replay" : "Headless"}
           </label>
         ))}
+      </div>
+
+      {/* Live-controllable during replay — only a running headless batch locks them. */}
+      <div className="pivot-options">
+        <label className="field-row">
+          <input
+            type="checkbox"
+            checked={po.enabled}
+            disabled={pivotsLocked}
+            onChange={e => p.onPivotOptions({ enabled: e.target.checked })}
+          />
+          Show pivots (swing highs/lows)
+        </label>
+        {po.enabled && (
+          <>
+            <label className="field">
+              Pivot lookback (candles per side)
+              <input
+                type="number"
+                min={1}
+                value={po.lookback}
+                disabled={pivotsLocked}
+                onChange={e => {
+                  const v = Math.floor(Number(e.target.value))
+                  if (v >= 1) p.onPivotOptions({ lookback: v })
+                }}
+              />
+            </label>
+            <label className="field-row" title="Collapse consecutive same-side pivots to the strongest.">
+              <input
+                type="checkbox"
+                checked={po.alternation}
+                disabled={pivotsLocked}
+                onChange={e => p.onPivotOptions({ alternation: e.target.checked })}
+              />
+              Enforce high/low alternation
+            </label>
+          </>
+        )}
       </div>
 
       <div className="pickers">

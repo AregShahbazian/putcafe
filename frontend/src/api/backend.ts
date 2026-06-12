@@ -44,6 +44,19 @@ export interface Decision {
   quoteAmount: number
 }
 
+export interface PivotOptions {
+  enabled: boolean
+  lookback: number
+  alternation: boolean
+}
+
+export interface Pivot {
+  time: number
+  type: "high" | "low"
+  price: number
+  confirmedAt: number
+}
+
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     ...init,
@@ -79,16 +92,29 @@ export const positions = {
 }
 
 export const bot = {
-  seed: (id: string, body: { algo: "dca"; config: AlgoConfig; candles: Candle[] }) =>
-    req<{ ok: true }>(`/api/bot/sessions/${id}/seed`, { method: "POST", body: JSON.stringify(body) }),
+  seed: (id: string, body: { algo: "dca"; config: AlgoConfig; candles: Candle[]; options?: PivotOptions }) =>
+    req<{ ok: true; pivots: Pivot[] | null }>(`/api/bot/sessions/${id}/seed`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
   step: (id: string, candle: Candle) =>
-    req<{ decisions: Decision[] }>(`/api/bot/sessions/${id}/step`, {
+    req<{ decisions: Decision[]; pivots: Pivot[] | null }>(`/api/bot/sessions/${id}/step`, {
       method: "POST",
       body: JSON.stringify({ candle }),
     }),
   run: (id: string, candles: Candle[]) =>
-    req<{ steps: number; trades: number }>(`/api/bot/sessions/${id}/run`, {
+    req<{ steps: number; trades: number; pivots: Pivot[] | null }>(`/api/bot/sessions/${id}/run`, {
       method: "POST",
       body: JSON.stringify({ candles }),
+    }),
+  setOptions: (id: string, pivots: PivotOptions) =>
+    req<{ ok: true; pivots: Pivot[] | null }>(`/api/bot/sessions/${id}/options`, {
+      method: "PUT",
+      body: JSON.stringify({ pivots }),
+    }),
+  analyze: (candles: Candle[], pivots: PivotOptions) =>
+    req<{ pivots: Pivot[] | null }>(`/api/bot/analyze`, {
+      method: "POST",
+      body: JSON.stringify({ candles, pivots }),
     }),
 }

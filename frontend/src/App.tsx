@@ -9,6 +9,8 @@ import BacktestPanel, { type PanelConfig, type PickerField } from "./components/
 import PlaybackControls from "./components/PlaybackControls"
 import ChartContextMenu, { type ContextMenuState } from "./components/ChartContextMenu"
 import { useSavedCandles } from "./util/savedCandles"
+import { usePivotOptions } from "./util/pivotOptions"
+import type { PivotOptions } from "./api/backend"
 
 const DEFAULT_MARKET: Market = { symbol: "BTCUSDT", baseAsset: "BTC", quoteAsset: "USDT" }
 
@@ -33,6 +35,7 @@ export default function App() {
   const [picking, setPicking] = useState<PickerField>(null)
   const [ctxMenu, setCtxMenu] = useState<ContextMenuState | null>(null)
   const savedCandles = useSavedCandles()
+  const pivotOptions = usePivotOptions()
 
   const engineRef = useRef<BacktestEngine | null>(null)
   const [snap, setSnap] = useState<EngineSnapshot | null>(null)
@@ -58,6 +61,12 @@ export default function App() {
       setPicking(null)
     }
   }, [market.symbol, interval, engine])
+
+  // The engine mirrors the persisted pivot options; mid-replay changes go to the
+  // bot as a live control (it recomputes and returns updated pivots).
+  useEffect(() => {
+    void engine.setPivotOptions(pivotOptions.options)
+  }, [pivotOptions.options, engine])
 
   // Escape cancels candle picking.
   useEffect(() => {
@@ -100,6 +109,7 @@ export default function App() {
           preCandles: s.preCandles,
           upTo: s.upTo,
           trades: s.trades,
+          pivots: s.pivots,
           fitRange: s.mode === "headless" && s.status === "finished",
         }
       : null
@@ -159,6 +169,8 @@ export default function App() {
             savedCandles={savedCandles.saved}
             onRemoveSaved={savedCandles.remove}
             onClearSaved={savedCandles.clear}
+            pivotOptions={pivotOptions.options}
+            onPivotOptions={(patch: Partial<PivotOptions>) => pivotOptions.set(patch)}
             rangeStart={rangeStart}
             rangeEnd={rangeEnd}
             picking={picking}
