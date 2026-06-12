@@ -1,0 +1,15 @@
+# Cross-app "home" portal — a static hub linking to every app on this box and to each
+# app's own "all releases" page. Imported by /root/orion/Caddyfile via the generic
+# `import /root/*/site.caddy` glob, so no Caddyfile edit is needed to wire it in.
+#
+# Caddy must be able to read /root/home — add `- /root/home:/root/home:ro` to the edge
+# stack's volumes (/root/orion/edge/compose.yml) and recreate the container. The
+# remote setup.sh in this dir does that idempotently.
+#
+# ORION_HOST comes from /root/orion/orion-web.env via the edge container's env_file, so
+# the host tracks the box automatically: home.203-0-113-10.sslip.io (or a real domain
+# later — set ORION_HOST and re-run setup; no edit here).
+home.{$ORION_HOST} {
+	root * /root/home/site
+	file_server
+}
