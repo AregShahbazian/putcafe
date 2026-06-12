@@ -6,3 +6,5 @@ __pycache__/
 *.local
 .DS_Store
 .venv/
+test-results/
+playwright-report/

@@ -17,6 +17,7 @@ import { fetchKlines, KLINE_LIMIT, type Candle } from "../binance/api"
 import { bot, type Pivot, type PivotOptions, type PivotSimResult, type Trade } from "../api/backend"
 import { RangeHighlight, type RangeSelection } from "./RangeHighlight"
 import { PivotMarkers } from "./PivotMarkers"
+import { registerChartHandle } from "../debug/bridge"
 
 const TRADE_MARKER_SIZE = 1.4 // 40% larger than the default arrow markers
 
@@ -128,6 +129,11 @@ export default function ChartView({
   const ctxMenuRef = useRef(onChartContextMenu)
   clickRef.current = onChartClick
   ctxMenuRef.current = onChartContextMenu
+  // Console-bridge taps: the markers plugin has no read-back, so the last set
+  // is captured here; the selection prop is mirrored for the same reason.
+  const lastMarkersRef = useRef<SeriesMarker<Time>[]>([])
+  const rangeSelRef = useRef<RangeSelection>(rangeSelection)
+  rangeSelRef.current = rangeSelection
 
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -366,6 +372,7 @@ export default function ChartView({
     const pivotMarks = pivotMarkersRef.current
     if (!markers || !pivotMarks) return
     if (!session) {
+      lastMarkersRef.current = []
       markers.setMarkers([]) // no trades on the live chart
       pivotMarks.setPivots(livePivots.map(pv => ({ time: pv.time, type: pv.type, price: pv.price })))
       return
@@ -384,7 +391,9 @@ export default function ChartView({
             text: `B ${t.quoteAmount}`,
             size: TRADE_MARKER_SIZE,
           }))
-    markers.setMarkers(trades.sort((a, b) => (a.time as number) - (b.time as number)))
+    trades.sort((a, b) => (a.time as number) - (b.time as number))
+    lastMarkersRef.current = trades
+    markers.setMarkers(trades)
     pivotMarks.setPivots(
       session.pivots
         .filter(pv => pv.confirmedAt <= cutoff)
@@ -418,6 +427,40 @@ export default function ChartView({
   useEffect(() => {
     rangeRef.current?.setSelection(rangeSelection)
   }, [rangeSelection])
+
+  // Console bridge: expose what's actually drawn. Getters read the refs at
+  // call time, so a single mount-time registration never goes stale.
+  useEffect(() => {
+    return registerChartHandle({
+      visibleRange: () => {
+        const r = chartRef.current?.timeScale().getVisibleRange() ?? null
+        return { from: r ? (r.from as number) : null, to: r ? (r.to as number) : null }
+      },
+      markers: () =>
+        lastMarkersRef.current.map(m => ({
+          time: m.time as number,
+          position: m.position,
+          shape: m.shape,
+          color: m.color,
+          text: m.text,
+        })),
+      pivotShapes: () => (pivotMarkersRef.current?.pivots ?? []).map(pv => ({ ...pv })),
+      priceLines: () =>
+        priceLinesRef.current.map(line => {
+          const o = line.options()
+          return { price: o.price, title: o.title, color: o.color }
+        }),
+      rangeHighlight: () => ({ ...rangeSelRef.current }),
+      renderedCandles: () => {
+        const c = candlesRef.current
+        return {
+          count: c.length,
+          firstTime: c.length > 0 ? c[0].time : null,
+          lastTime: c.length > 0 ? c[c.length - 1].time : null,
+        }
+      },
+    })
+  }, [])
 
   return (
     <div className="chart-wrap">

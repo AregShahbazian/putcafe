@@ -12,6 +12,13 @@ import { useSavedCandles } from "./util/savedCandles"
 import { usePivotOptions } from "./util/pivotOptions"
 import { usePresets, type Preset } from "./util/presets"
 import type { PivotOptions } from "./api/backend"
+import {
+  bridgeSnapshot,
+  installBridge,
+  registerAppHandle,
+  type SessionOverrides,
+  type UiState,
+} from "./debug/bridge"
 
 const DEFAULT_MARKET: Market = { symbol: "BTCUSDT", baseAsset: "BTC", quoteAsset: "USDT" }
 
@@ -45,7 +52,12 @@ export default function App() {
 
   const engineRef = useRef<BacktestEngine | null>(null)
   const [snap, setSnap] = useState<EngineSnapshot | null>(null)
-  if (engineRef.current === null) engineRef.current = new BacktestEngine(setSnap)
+  // The bridge taps every engine snapshot (events + waiters) before React sees it.
+  if (engineRef.current === null)
+    engineRef.current = new BacktestEngine(sn => {
+      bridgeSnapshot(sn)
+      setSnap(sn)
+    })
   const engine = engineRef.current
   const s: EngineSnapshot = snap ?? engine.snapshot
 
@@ -158,6 +170,92 @@ export default function App() {
     setPicking(null)
     setPanelOpen(true)
   }
+
+  // Console bridge (`window.pc`): the handle's getters/actions read these refs,
+  // rebuilt every render, so registration happens once but never goes stale.
+  const uiRef = useRef<UiState>(undefined as unknown as UiState)
+  uiRef.current = {
+    market,
+    interval,
+    config,
+    pivotOptions: pivotOptions.options,
+    rangeStart,
+    rangeEnd,
+    presets: presets.presets.map(p => p.name),
+  }
+
+  // Bridge-driven start: builds the SessionConfig from merged current-state +
+  // overrides itself (no stale setState reads) and syncs the visible UI to it.
+  const startFromBridge = (o: SessionOverrides) => {
+    const symbol = o.market ?? market.symbol
+    const iv = o.interval ?? interval
+    const cfg: PanelConfig = {
+      mode: o.mode ?? config.mode,
+      algo: o.algo ?? config.algo,
+      quoteAmount: o.quoteAmount ?? config.quoteAmount,
+      frequencySec: o.frequencySec ?? config.frequencySec,
+      startingBalance: o.startingBalance ?? config.startingBalance,
+      feesEnabled: o.feesEnabled ?? config.feesEnabled,
+      tpSlRatio: o.tpSlRatio ?? config.tpSlRatio,
+      slCapPct: o.slCapPct ?? config.slCapPct,
+      positionSize: o.positionSize ?? config.positionSize,
+    }
+    // Pre-sync the market/interval key (same trick as loadPreset) so the
+    // change effect doesn't stop the session we're about to start.
+    prevKeyRef.current = `${symbol}-${iv}`
+    if (symbol !== market.symbol)
+      setMarket(
+        markets.find(m => m.symbol === symbol) ?? {
+          symbol,
+          baseAsset: symbol.replace(/USDT$/, ""),
+          quoteAsset: "USDT",
+        },
+      )
+    if (iv !== interval) setInterval(iv)
+    setConfig(cfg)
+    setRangeStart(o.start)
+    setRangeEnd(o.end)
+    setPicking(null)
+    setPanelOpen(true)
+    void engine.start({
+      market: symbol,
+      interval: iv,
+      startTime: o.start!,
+      endTime: o.end!,
+      mode: cfg.mode,
+      algo: cfg.algo,
+      algoConfig: { quoteAmount: cfg.quoteAmount, frequencySec: cfg.frequencySec },
+      pivotParams:
+        cfg.algo === "pivot"
+          ? { tpSlRatio: cfg.tpSlRatio, slCapPct: cfg.slCapPct, quoteAmount: cfg.positionSize }
+          : undefined,
+      startingBalance: cfg.startingBalance,
+      feesEnabled: cfg.feesEnabled,
+    })
+  }
+
+  const loadPresetByName = (name: string) => {
+    const p = presets.presets.find(x => x.name === name)
+    if (!p)
+      throw new Error(
+        `preset "${name}" not found (have: ${presets.presets.map(x => x.name).join(", ") || "none"})`,
+      )
+    loadPreset(p)
+  }
+
+  const bridgeRef = useRef({ startFromBridge, loadPresetByName })
+  bridgeRef.current = { startFromBridge, loadPresetByName }
+
+  useEffect(() => {
+    installBridge(engine)
+    return registerAppHandle({
+      getUi: () => uiRef.current,
+      startSession: o => bridgeRef.current.startFromBridge(o),
+      stopSession: () => engine.stop(),
+      loadPreset: name => bridgeRef.current.loadPresetByName(name),
+      loadSession: id => void engine.loadSession(id),
+    })
+  }, [engine])
 
   const onChartClick = (time: number) => {
     if (!picking) return
