@@ -80,9 +80,29 @@ export interface PivotTrade {
   feePaid: number
 }
 
+/** One order in the sim's ledger: armed entry stops, the TP/SL bracket legs,
+ * and reverse market exits — with full lifecycle timestamps. Status is the
+ * final state; the at-cursor state is derived in `util/orders.ts`. */
+export interface PivotOrder {
+  id: number
+  role: "entry" | "tp" | "sl" | "exit"
+  type: "stop_market" | "limit" | "market"
+  side: "buy" | "sell"
+  price: number
+  qty: number
+  pct: number | null // tp/sl distance from entry, signed %
+  createdAt: number
+  status: "open" | "filled" | "cancelled"
+  filledAt: number | null
+  fillPrice: number | null
+  cancelledAt: number | null
+  tradeIdx: number | null
+}
+
 export interface PivotSimResult {
   pivots: Pivot[] | null
   trades: PivotTrade[]
+  orders: PivotOrder[]
   equity: number
   realizedPnl: number
   wins: number

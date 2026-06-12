@@ -204,8 +204,115 @@ button {
   flex-direction: column;
 }
 
-.app-main .chart-wrap {
+/* Chart + playback strip wrapper — keeps the absolutely-positioned strip on
+   the chart's bottom edge instead of the app-main bottom (overview widget). */
+.chart-area {
+  position: relative;
   flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.chart-area .chart-wrap {
+  flex: 1;
+}
+
+/* Overview widget (below the chart, up to the sidebar) */
+
+.overview-widget {
+  flex: none;
+  height: 230px;
+  border-top: 1px solid #2a2e39;
+  display: flex;
+  flex-direction: column;
+}
+
+.ow-tabs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 8px;
+  border-bottom: 1px solid #2a2e39;
+  flex: none;
+}
+
+.ow-tab {
+  background: none;
+  border: none;
+  border-radius: 3px;
+  padding: 4px 10px;
+  color: #787b86;
+}
+
+.ow-tab:hover {
+  color: #d1d4dc;
+}
+
+.ow-tab.selected {
+  background: #2a2e39;
+  color: #d1d4dc;
+  font-weight: 600;
+}
+
+.ow-filter {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.ow-body {
+  flex: 1;
+  overflow-y: auto;
+}
+
+.ow-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.ow-table th {
+  position: sticky;
+  top: 0;
+  background: #131722;
+  text-align: left;
+  color: #787b86;
+  font-weight: 600;
+  padding: 6px 10px;
+  border-bottom: 1px solid #2a2e39;
+}
+
+.ow-table td {
+  padding: 5px 10px;
+  border-bottom: 1px solid #1e222d;
+}
+
+.overview-widget .pos {
+  color: #26a69a;
+}
+
+.overview-widget .neg {
+  color: #ef5350;
+}
+
+.ow-muted {
+  color: #787b86;
+}
+
+.ow-empty {
+  color: #787b86;
+  text-align: center;
+  padding: 14px 0;
+}
+
+.ow-clickable {
+  cursor: pointer;
+}
+
+.ow-clickable:hover td {
+  background: #1e222d;
 }
 
 .header-button {

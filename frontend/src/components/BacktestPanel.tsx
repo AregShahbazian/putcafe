@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react"
-import { positions, type PivotOptions, type Session } from "../api/backend"
+import { useState } from "react"
+import type { PivotOptions } from "../api/backend"
 import type { Preset } from "../util/presets"
 import type { EngineSnapshot } from "../backtest/engine"
 import { fetchKlinesRange } from "../binance/api"
@@ -51,7 +51,6 @@ interface Props {
   onPick: (field: PickerField) => void
   onStart: () => void
   onStop: () => void
-  onLoadSession: (id: string) => void
   savedCandles: SavedCandle[]
   onRemoveSaved: (index: number) => void
   onClearSaved: () => void
@@ -72,20 +71,7 @@ export default function BacktestPanel(p: Props) {
   const { snap, config } = p
   const active = snap.status !== "idle" && snap.status !== "loading"
   const running = snap.status === "playing" || snap.status === "ready" || snap.status === "paused"
-  const [sessions, setSessions] = useState<Session[]>([])
-  const [sessionsError, setSessionsError] = useState<string | null>(null)
   const [exporting, setExporting] = useState(false)
-
-  const refreshSessions = () =>
-    positions
-      .listSessions()
-      .then(setSessions)
-      .catch((e: unknown) => setSessionsError(e instanceof Error ? e.message : String(e)))
-
-  useEffect(() => {
-    if (snap.status !== "idle" && snap.status !== "finished") return
-    void refreshSessions()
-  }, [snap.status])
 
   const exportRange = async () => {
     if (p.rangeStart === undefined || p.rangeEnd === undefined) return
@@ -99,12 +85,6 @@ export default function BacktestPanel(p: Props) {
     } finally {
       setExporting(false)
     }
-  }
-
-  const clearSessions = async () => {
-    const activeId = s && s.status === "active" ? s.id : undefined
-    await positions.clearSessions(activeId).catch(() => {})
-    void refreshSessions()
   }
 
   const set = (patch: Partial<PanelConfig>) => p.onConfig({ ...config, ...patch })
@@ -406,29 +386,6 @@ export default function BacktestPanel(p: Props) {
               </button>
               <button className="preset-remove" title="Remove" onClick={() => p.onRemovePreset(preset.name)}>×</button>
             </div>
-          ))}
-        </div>
-      )}
-
-      {!running && (
-        <div className="sessions">
-          <div className="section-head">
-            <h4>Sessions</h4>
-            {sessions.length > 0 && (
-              <button className="tool-button small" onClick={() => void clearSessions()}>
-                Clear sessions
-              </button>
-            )}
-          </div>
-          {sessionsError && <div className="panel-error">{sessionsError}</div>}
-          {sessions.length === 0 && !sessionsError && <div className="sessions-empty">None yet</div>}
-          {sessions.map(item => (
-            <button key={item.id} className="session-row" onClick={() => p.onLoadSession(item.id)}>
-              <span>{item.market} · {item.interval} · {item.mode}</span>
-              <span className="session-date">
-                {new Date(item.createdAt).toLocaleDateString()} · {item.status}
-              </span>
-            </button>
           ))}
         </div>
       )}
