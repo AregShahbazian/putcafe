@@ -2,7 +2,8 @@
 # Runs ON the VPS (as root). Idempotent — every step checks first, then acts; safe to
 # re-run against the live box anytime.
 #
-# Adds the putcafe site to the EXISTING Orion edge (one shared Caddy, orion-web.service):
+# Adds the putcafe site to the EXISTING Orion edge (one shared containerized Caddy,
+# Orion's `edge` compose stack):
 # lays out /root/putcafe, ensures one `import` line in /root/orion/Caddyfile (validated,
 # reverted on failure), reloads the edge, and generates the putcafe CI deploy key.
 # Orion is required and otherwise untouched.
@@ -16,6 +17,7 @@ die() { printf '\033[1;31m[putcafe-vps] %s\033[0m\n' "$*" >&2; exit 1; }
 PUTCAFE=/root/putcafe
 ORION_CADDYFILE=/root/orion/Caddyfile
 ORION_ENV=/root/orion/orion-web.env
+EDGE_COMPOSE=/root/orion/edge/compose.yml
 IMPORT_LINE="import $PUTCAFE/site.caddy"
 # Orion's phase-12 Caddyfile template imports sibling sites generically; when that
 # line is present, no putcafe-specific line is needed.
@@ -23,13 +25,12 @@ GLOB_IMPORT='import /root/*/site.caddy'
 OLD_IMPORT="import $PUTCAFE/putcafe.caddy"
 
 # --- Preconditions: the Orion edge must exist (putcafe never provisions Caddy) --------
-command -v caddy >/dev/null 2>&1 || die "caddy not installed — provision the Orion edge first"
+# The edge is Orion's `edge` compose stack (containerized Caddy, host networking).
+command -v docker >/dev/null 2>&1 || die "docker not installed — provision the Orion edge first"
 [ -f "$ORION_CADDYFILE" ] || die "$ORION_CADDYFILE missing — provision the Orion edge first"
-systemctl list-unit-files orion-web.service >/dev/null 2>&1 \
-  && systemctl is-enabled orion-web >/dev/null 2>&1 \
-  || die "orion-web.service missing/disabled — provision the Orion edge first"
+[ -f "$EDGE_COMPOSE" ] || die "$EDGE_COMPOSE missing — provision the Orion edge first"
 
-# ORION_HOST for validation + reporting (the running unit gets it from its EnvironmentFile).
+# ORION_HOST for validation + reporting (the running container gets it via env_file).
 ORION_HOST=""
 [ -f "$ORION_ENV" ] && ORION_HOST="$(sed -n 's/^ORION_HOST=//p' "$ORION_ENV")"
 [ -n "$ORION_HOST" ] || die "$ORION_ENV missing/empty — run the Orion edge setup first"
@@ -54,20 +55,23 @@ else
   log "appending import line to $ORION_CADDYFILE"
   cp "$ORION_CADDYFILE" "$ORION_CADDYFILE.pre-putcafe"
   printf '\n# putcafe site (added by %s/setup.sh)\n%s\n' "$PUTCAFE" "$IMPORT_LINE" >> "$ORION_CADDYFILE"
-  if ! ORION_HOST="$ORION_HOST" caddy validate --config "$ORION_CADDYFILE" --adapter caddyfile >/dev/null 2>&1; then
+  if ! docker run --rm -e "ORION_HOST=$ORION_HOST" \
+         -v /root/orion:/root/orion:ro -v /root/putcafe:/root/putcafe:ro \
+         caddy:2.11 caddy validate --config "$ORION_CADDYFILE" --adapter caddyfile >/dev/null 2>&1; then
     mv "$ORION_CADDYFILE.pre-putcafe" "$ORION_CADDYFILE"
     die "merged Caddyfile failed validation — reverted, Orion edge unchanged"
   fi
   rm -f "$ORION_CADDYFILE.pre-putcafe"
 fi
 
-# --- Apply: reload keeps connections; restart only if the edge isn't running ----------
-if systemctl is-active --quiet orion-web; then
-  log "reloading orion-web"
-  systemctl reload orion-web || systemctl restart orion-web
+# --- Apply: reload keeps connections; start the stack only if it isn't running --------
+if docker ps --filter name=edge-caddy --format '{{.Names}}' | grep -q .; then
+  log "reloading the edge caddy"
+  docker compose -f "$EDGE_COMPOSE" exec -T caddy \
+    caddy reload --config "$ORION_CADDYFILE" --adapter caddyfile --force
 else
-  log "orion-web not running — starting it"
-  systemctl restart orion-web
+  log "edge not running — starting it"
+  docker compose -f "$EDGE_COMPOSE" up -d
 fi
 
 # --- CI / ops deploy key (separate from Orion's) ---------------------------------------
@@ -82,6 +86,6 @@ touch /root/.ssh/authorized_keys && chmod 600 /root/.ssh/authorized_keys
 grep -qF "$PUB" /root/.ssh/authorized_keys || echo "$PUB" >> /root/.ssh/authorized_keys
 
 # --- Report ---------------------------------------------------------------------------
-log "orion-web status: $(systemctl is-active orion-web)"
+log "edge status: $(docker ps --filter name=edge-caddy --format '{{.Status}}' | grep . || echo 'NOT RUNNING')"
 log "done. https://putcafe.$ORION_HOST/web/  | web root: $PUTCAFE/site  | CI key: $KEY"
 log "(first cert issuance for the new subdomain takes a few seconds)"
