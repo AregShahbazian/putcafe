@@ -15,7 +15,7 @@ import type { PivotOptions } from "./api/backend"
 const DEFAULT_MARKET: Market = { symbol: "BTCUSDT", baseAsset: "BTC", quoteAsset: "USDT" }
 
 const DEFAULT_CONFIG: PanelConfig = {
-  mode: "replay",
+  mode: "headless",
   algo: "dca",
   quoteAmount: 10,
   frequencySec: 7 * 86400,
@@ -32,7 +32,7 @@ export default function App() {
   const [market, setMarket] = useState<Market>(DEFAULT_MARKET)
   const [interval, setInterval] = useState<Interval>("1h")
 
-  const [panelOpen, setPanelOpen] = useState(false)
+  const [panelOpen, setPanelOpen] = useState(true)
   const [config, setConfig] = useState<PanelConfig>(DEFAULT_CONFIG)
   const [rangeStart, setRangeStart] = useState<number | undefined>()
   const [rangeEnd, setRangeEnd] = useState<number | undefined>()
