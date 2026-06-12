@@ -10,6 +10,10 @@
 #          Staging: push to `main`                   -> /web/staging/
 #          Preview: push to `feature/**` or `dev/**` -> /web/<slot>/   (`feature/` stripped)
 #   api    push to `main`                            -> /root/putcafe/api (compose up --build)
+#          manual: Actions "Run workflow" on any branch with deploy_api checked —
+#          test backend changes pre-merge. The API stack is SHARED (one stack for
+#          all slots): a branch dispatch overwrites what main deployed; the next
+#          backend push to main restores it.
 #
 # The prod job declares `environment: production` — GitHub's required-reviewer gate,
 # created by scripts/dev/local/edge/setup-github.sh. Approve the run in the repo UI.
@@ -28,7 +32,12 @@ on:
       - 'dev/**'
     tags:
       - 'v*'
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      deploy_api:
+        description: "Deploy the API stack from this ref (shared stack — overwrites main's deploy)"
+        type: boolean
+        default: false
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -45,6 +54,10 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
         id: filter
+        # Push only — a manual dispatch has no push diff; its deploys are driven
+        # by the deploy_api input alone (outputs stay empty, so web/api path
+        # conditions are false).
+        if: github.event_name == 'push'
         with:
           filters: |
             frontend:
@@ -133,10 +146,13 @@ jobs:
           rsync -az -e "ssh -p ${{ vars.VPS_PORT }}" \
             frontend/dist/ "${{ vars.VPS_USER }}@${{ vars.VPS_HOST }}:/root/putcafe/site/web/"
 
-  # --- Deploy API stack (main + backend changes; Docker layer cache on the box) -
+  # --- Deploy API stack (main + backend changes, or manual deploy_api dispatch
+  # from any branch; Docker layer cache on the box) ------------------------------
   api:
     needs: changes
-    if: github.ref == 'refs/heads/main' && needs.changes.outputs.backend == 'true'
+    if: >-
+      (github.ref == 'refs/heads/main' && needs.changes.outputs.backend == 'true') ||
+      (github.event_name == 'workflow_dispatch' && inputs.deploy_api)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
