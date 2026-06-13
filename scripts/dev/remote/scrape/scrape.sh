@@ -49,9 +49,10 @@ case "$cmd" in
     dc logs -f --tail 50 scrape
     ;;
   overview)
-    # What candle data we actually have, per exchange/resolution. --log writes
-    # a timestamped snapshot to /data/overviews/.
-    dc run --rm --no-deps -T scrape python -m scraper.overview "$@"
+    # What candle data we have, per exchange. --log writes a timestamped
+    # snapshot to /data/overviews/. Stderr hidden so compose's container-
+    # lifecycle chatter doesn't clutter the table.
+    dc run --rm --no-deps -T scrape python -m scraper.overview "$@" 2>/dev/null
     ;;
   export)
     dc run --rm --no-deps scrape python -m scraper.export "$@"

@@ -1,7 +1,7 @@
-"""Corpus overview — scans every /data/<exchange>.db shard and reports what
-candle data we actually have: per exchange and resolution, the market count,
-candle count, and date span. Prints to stdout and (with --log) appends a
-timestamped Markdown snapshot under /data/overviews/ as a durable record.
+"""Corpus overview — fast. For each /data/<exchange>.db shard: file size on
+disk, market count, and the 1m date span. No COUNT(*) over the big table — the
+span comes from indexed MIN/MAX seeks per (market,'1m'), which are PK-prefix
+boundary lookups, so this returns in well under a second.
 
   python -m scraper.overview [--log]
 """
@@ -14,68 +14,82 @@ import time
 
 from . import config
 
+SPAN_RES = "1m"
+
+# Loose index skip-scan: ~one seek per distinct market instead of walking the
+# whole clustered PK (market,resolution,ts).
+DISTINCT_MARKETS = """
+WITH RECURSIVE m(x) AS (
+  SELECT MIN(market) FROM candles
+  UNION ALL
+  SELECT (SELECT MIN(market) FROM candles WHERE market > x) FROM m WHERE x IS NOT NULL
+)
+SELECT x FROM m WHERE x IS NOT NULL
+"""
+
 
 def _iso(ts_ms):
     return time.strftime("%Y-%m-%d", time.gmtime(ts_ms / 1000)) if ts_ms else "-"
 
 
-def _fmt(n: int) -> str:
-    return f"{n:,}"
-
-
-def collect() -> dict:
-    """{exchange: {"markets": int, "candles": int, "by_res": {res: (mkts, candles, first, last)}}}"""
-    out = {}
+def collect() -> list[dict]:
+    rows = []
     for path in sorted(glob.glob(os.path.join(config.DATA_DIR, "*.db"))):
         ex = os.path.splitext(os.path.basename(path))[0]
+        size_mb = os.path.getsize(path) / 1_048_576
         conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
         try:
-            rows = conn.execute(
-                "SELECT resolution, COUNT(DISTINCT market), COUNT(*),"
-                " MIN(ts), MAX(ts) FROM candles GROUP BY resolution"
-            ).fetchall()
-            markets = conn.execute(
-                "SELECT COUNT(DISTINCT market) FROM candles").fetchone()[0]
-            total = conn.execute("SELECT COUNT(*) FROM candles").fetchone()[0]
+            markets = [m for (m,) in conn.execute(DISTINCT_MARKETS)]
+            lo = hi = None
+            for m in markets:
+                r = conn.execute(
+                    "SELECT MIN(ts), MAX(ts) FROM candles"
+                    " WHERE market=? AND resolution=?", (m, SPAN_RES)).fetchone()
+                if r[0] is not None:
+                    lo = r[0] if lo is None else min(lo, r[0])
+                    hi = r[1] if hi is None else max(hi, r[1])
         finally:
             conn.close()
-        out[ex] = {
-            "markets": markets, "candles": total,
-            "by_res": {r[0]: (r[1], r[2], r[3], r[4]) for r in rows},
-        }
-    return out
+        rows.append({"exchange": ex, "markets": len(markets),
+                     "size_mb": size_mb, "span_1m": (lo, hi)})
+    return rows
 
 
-def render(data: dict) -> str:
-    resolutions = config.RESOLUTIONS
-    g_markets = sum(d["markets"] for d in data.values())
-    g_candles = sum(d["candles"] for d in data.values())
-    lines = [
-        f"# Candle corpus overview — {time.strftime('%Y-%m-%d %H:%M', time.gmtime())} UTC",
+def _size(mb: float) -> str:
+    return f"{mb / 1024:,.1f} GB" if mb >= 1024 else f"{mb:,.0f} MB"
+
+
+def render(data: list[dict]) -> str:
+    data = sorted(data, key=lambda x: -x["size_mb"])
+    total_mb = sum(d["size_mb"] for d in data)
+    total_mk = sum(d["markets"] for d in data)
+
+    rows = []
+    for d in data:
+        lo, hi = d["span_1m"]
+        rows.append((
+            d["exchange"],
+            str(d["markets"]),
+            _size(d["size_mb"]),
+            f"{_iso(lo)} → {_iso(hi)}" if lo else "—",
+        ))
+    headers = ("EXCHANGE", "MARKETS", "SIZE", "1m DATA SPAN")
+    w = [max(len(headers[i]), *(len(r[i]) for r in rows)) for i in range(4)]
+
+    def line(c):
+        return (f"  {c[0]:<{w[0]}}   {c[1]:>{w[1]}}   "
+                f"{c[2]:>{w[2]}}   {c[3]:<{w[3]}}")
+
+    rule = "  " + "─" * (sum(w) + 9)
+    out = [
+        f"  Candle corpus — {time.strftime('%Y-%m-%d %H:%M', time.gmtime())} UTC",
+        f"  {len(data)} exchanges · {total_mk} markets · {_size(total_mb)} on disk",
         "",
-        f"- **{len(data)} exchanges**, {g_markets} market-shards, "
-        f"**{_fmt(g_candles)} candles**",
-        f"- resolutions: {'/'.join(resolutions)}; filters: top {config.TOP_N}/exchange, "
-        f"bases {'/'.join(sorted(config.BASES))}, last {config.YEARS}y",
-        "",
-        "| exchange | markets | candles | "
-        + " | ".join(f"{r} (cdl · span)" for r in resolutions) + " |",
-        "|---|---|---|" + "---|" * len(resolutions),
+        line(headers),
+        rule,
     ]
-    for ex, d in sorted(data.items(), key=lambda kv: -kv[1]["candles"]):
-        cells = []
-        for r in resolutions:
-            v = d["by_res"].get(r)
-            if not v:
-                cells.append("—")
-            else:
-                _, cdl, lo, hi = v
-                cells.append(f"{_fmt(cdl)} · {_iso(lo)}→{_iso(hi)}")
-        lines.append(
-            f"| {ex} | {d['markets']} | {_fmt(d['candles'])} | "
-            + " | ".join(cells) + " |"
-        )
-    return "\n".join(lines)
+    out += [line(r) for r in rows]
+    return "\n".join(out)
 
 
 def main():
