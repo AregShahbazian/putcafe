@@ -42,9 +42,13 @@ def collect() -> list[dict]:
             markets = [m for (m,) in conn.execute(DISTINCT_MARKETS)]
             lo = hi = None
             for m in markets:
+                # MIN and MAX as separate scalar subqueries — one aggregate each
+                # so SQLite uses the index seek (a single MIN(ts),MAX(ts) query
+                # would scan every 1m row of the market instead).
                 r = conn.execute(
-                    "SELECT MIN(ts), MAX(ts) FROM candles"
-                    " WHERE market=? AND resolution=?", (m, SPAN_RES)).fetchone()
+                    "SELECT (SELECT MIN(ts) FROM candles WHERE market=? AND resolution=?),"
+                    "       (SELECT MAX(ts) FROM candles WHERE market=? AND resolution=?)",
+                    (m, SPAN_RES, m, SPAN_RES)).fetchone()
                 if r[0] is not None:
                     lo = r[0] if lo is None else min(lo, r[0])
                     hi = r[1] if hi is None else max(hi, r[1])
