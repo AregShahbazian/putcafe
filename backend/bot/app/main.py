@@ -38,6 +38,8 @@ class FuturesParams(BaseModel):
     frequencySec: int = Field(default=7 * 24 * 3600, gt=0)  # DCA cadence
     feesEnabled: bool = True
     startingBalance: float = 1000.0
+    # Indicator-algo knobs (fast/slow/period/oversold/…); ignored by dca/pivot.
+    algoParams: dict = Field(default_factory=dict)
 
 
 class RunBody(BaseModel):

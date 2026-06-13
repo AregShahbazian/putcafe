@@ -1,0 +1,87 @@
+{
+  "meta": {
+    "symbols": [
+      "BTCUSDT",
+      "ETHUSDT"
+    ],
+    "interval": "1h",
+    "windows": 6,
+    "windowSize": 1000
+  },
+  "ranking": [
+    "donchian",
+    "bollinger",
+    "rsi_revert",
+    "macd",
+    "ma_cross"
+  ],
+  "tuned": {
+    "ma_cross": {
+      "algoParams": {
+        "fast": 10,
+        "slow": 100,
+        "maType": "ema"
+      },
+      "tpSlRatio": 2.0,
+      "slCapPct": 4.0,
+      "medianRoi": -1.21,
+      "pctGreen": 16.7,
+      "worstRoi": -3.37,
+      "trades": 142,
+      "score": -0.201
+    },
+    "rsi_revert": {
+      "algoParams": {
+        "period": 7,
+        "oversold": 20,
+        "overbought": 80
+      },
+      "tpSlRatio": 2.0,
+      "slCapPct": 4.0,
+      "medianRoi": -0.68,
+      "pctGreen": 0.0,
+      "worstRoi": -1.62,
+      "trades": 190,
+      "score": -0.0
+    },
+    "bollinger": {
+      "algoParams": {
+        "period": 20,
+        "mult": 2.5
+      },
+      "tpSlRatio": 3.0,
+      "slCapPct": 4.0,
+      "medianRoi": 0.44,
+      "pctGreen": 66.7,
+      "worstRoi": -1.87,
+      "trades": 92,
+      "score": 0.293
+    },
+    "donchian": {
+      "algoParams": {
+        "period": 30
+      },
+      "tpSlRatio": 3.0,
+      "slCapPct": 4.0,
+      "medianRoi": 1.1,
+      "pctGreen": 66.7,
+      "worstRoi": -2.72,
+      "trades": 113,
+      "score": 0.733
+    },
+    "macd": {
+      "algoParams": {
+        "fast": 8,
+        "slow": 21,
+        "signal": 9
+      },
+      "tpSlRatio": 2.0,
+      "slCapPct": 4.0,
+      "medianRoi": -2.47,
+      "pctGreen": 0.0,
+      "worstRoi": -6.98,
+      "trades": 583,
+      "score": -0.0
+    }
+  }
+}

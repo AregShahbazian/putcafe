@@ -1,5 +1,5 @@
 import type { BacktestEngine, EngineSnapshot } from "../backtest/engine"
-import { positions, type PivotOptions, type Session } from "../api/backend"
+import { positions, type AlgoName, type AlgoParams, type PivotOptions, type Session } from "../api/backend"
 import { INTERVAL_SECONDS, type Candle, type Market } from "../binance/api"
 import type { Interval } from "../components/TimeframeSelector"
 import type { PanelConfig } from "../components/BacktestPanel"
@@ -44,7 +44,7 @@ export interface SessionOverrides {
   start?: number
   end?: number
   mode?: "replay" | "headless"
-  algo?: "dca" | "pivot"
+  algo?: AlgoName
   quoteAmount?: number
   frequencySec?: number
   startingBalance?: number
@@ -53,6 +53,7 @@ export interface SessionOverrides {
   slCapPct?: number
   positionSize?: number
   leverage?: number
+  algoParams?: AlgoParams // indicator-algo knobs (fast/slow/period/…)
 }
 
 export interface AppHandle {

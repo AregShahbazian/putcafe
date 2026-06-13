@@ -23,6 +23,7 @@ const paramsOf = (cfg: PanelConfig): FuturesParams => ({
   tpSlRatio: cfg.tpSlRatio,
   slCapPct: cfg.slCapPct,
   frequencySec: cfg.frequencySec,
+  algoParams: cfg.algoParams,
 })
 import {
   bridgeSnapshot,
@@ -45,6 +46,7 @@ const DEFAULT_CONFIG: PanelConfig = {
   slCapPct: 4,
   positionSize: 100,
   leverage: 1,
+  algoParams: {},
 }
 
 export default function App() {
@@ -103,7 +105,7 @@ export default function App() {
   // Run params: live control during a replay (re-runs the snapshot in place).
   useEffect(() => {
     void engine.setParams(paramsOf(config))
-  }, [config.algo, config.quoteAmount, config.frequencySec, config.tpSlRatio, config.slCapPct, config.positionSize, config.leverage, engine])
+  }, [config.algo, config.quoteAmount, config.frequencySec, config.tpSlRatio, config.slCapPct, config.positionSize, config.leverage, config.algoParams, engine])
 
   // Escape cancels candle picking.
   useEffect(() => {
@@ -197,6 +199,7 @@ export default function App() {
       slCapPct: o.slCapPct ?? config.slCapPct,
       positionSize: o.positionSize ?? config.positionSize,
       leverage: o.leverage ?? config.leverage,
+      algoParams: o.algoParams ?? config.algoParams,
     }
     // Pre-sync the market/interval key (same trick as loadPreset) so the
     // change effect doesn't stop the session we're about to start.
