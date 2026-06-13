@@ -161,6 +161,19 @@ def _bench_read(key: str, fn):
     raise HTTPException(status_code=503, detail=f"benchmark data busy: {last_err}")
 
 
+def _pctile(sorted_xs: list[float], q: float) -> float:
+    """Linear-interpolated percentile of an already-sorted list."""
+    if not sorted_xs:
+        return 0.0
+    if len(sorted_xs) == 1:
+        return sorted_xs[0]
+    pos = q * (len(sorted_xs) - 1)
+    lo = int(pos)
+    frac = pos - lo
+    hi = min(lo + 1, len(sorted_xs) - 1)
+    return sorted_xs[lo] + (sorted_xs[hi] - sorted_xs[lo]) * frac
+
+
 def _median(xs: list[float]) -> float:
     s = sorted(xs)
     n = len(s)
@@ -241,3 +254,34 @@ def bench_sessions(config_hash: str, exchange: str | None = None,
             for ex, m, r, rs, re_, ret, win, dd, tr, bust in rows
         ]}
     return _bench_read(f"sessions:{config_hash}:{exchange}:{market}:{resolution}", query)
+
+
+@app.get("/api/bot/bench/compare")
+def bench_compare():
+    """Cross-algo comparison on the shared windows (all algos run identical
+    slices). Returns box-plot stats per algo + a per-market avg-return matrix."""
+    def query(conn):
+        rows = conn.execute(
+            "SELECT algo, exchange, market, return_pct FROM results").fetchall()
+        per_algo: dict = {}
+        per_cell: dict = {}
+        markets: set = set()
+        for algo, ex, m, ret in rows:
+            per_algo.setdefault(algo, []).append(ret or 0.0)
+            mkt = f"{ex} {m}"
+            markets.add(mkt)
+            per_cell.setdefault((algo, mkt), []).append(ret or 0.0)
+        algos = []
+        for algo, xs in per_algo.items():
+            s = sorted(xs)
+            algos.append({
+                "algo": algo, "n": len(s), "min": s[0], "max": s[-1],
+                "p25": _pctile(s, 0.25), "median": _pctile(s, 0.5),
+                "p75": _pctile(s, 0.75), "mean": sum(s) / len(s)})
+        algos.sort(key=lambda a: a["median"], reverse=True)
+        order = [a["algo"] for a in algos]
+        matrix = {algo: {} for algo in order}
+        for (algo, mkt), xs in per_cell.items():
+            matrix[algo][mkt] = sum(xs) / len(xs)
+        return {"algos": algos, "markets": sorted(markets), "matrix": matrix}
+    return _bench_read("compare", query)

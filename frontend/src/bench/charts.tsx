@@ -85,6 +85,53 @@ export function HBars({ items, onClick }: {
   )
 }
 
+/** Horizontal box-and-whisker per algo on a shared scale — the cross-algo
+ * return-distribution comparison (identical windows → directly comparable). */
+export function BoxPlot({ items }: {
+  items: { algo: string; min: number; p25: number; median: number; p75: number; max: number }[]
+}) {
+  if (!items.length) return <Empty h={120} />
+  const lo = Math.min(...items.map((d) => d.min))
+  const hi = Math.max(...items.map((d) => d.max))
+  const span = hi - lo || 1
+  const W = 1000, L = 130, R = 70, rowH = 30, axisH = 18
+  const plotW = W - L - R
+  const x = (v: number) => L + ((v - lo) / span) * plotW
+  const height = axisH + items.length * rowH + 6
+  const zeroX = x(0)
+  return (
+    <svg width="100%" viewBox={`0 0 ${W} ${height}`} style={{ fontSize: 11 }}>
+      {/* axis */}
+      <text x={L} y={12} fill={TEXT} fontSize={10}>{lo.toFixed(1)}%</text>
+      <text x={W - R} y={12} fill={TEXT} fontSize={10} textAnchor="end">{hi.toFixed(1)}%</text>
+      {lo < 0 && hi > 0 && (
+        <line x1={zeroX} y1={axisH} x2={zeroX} y2={height} stroke={AXIS} strokeDasharray="3 3" />
+      )}
+      {items.map((d, i) => {
+        const cy = axisH + i * rowH + rowH / 2
+        const col = d.median >= 0 ? POS : NEG
+        return (
+          <g key={d.algo}>
+            <text x={4} y={cy + 4} fill="#c9d1d9" fontSize={12}>{d.algo}</text>
+            {/* whisker */}
+            <line x1={x(d.min)} y1={cy} x2={x(d.max)} y2={cy} stroke={col} opacity={0.5} />
+            <line x1={x(d.min)} y1={cy - 5} x2={x(d.min)} y2={cy + 5} stroke={col} opacity={0.6} />
+            <line x1={x(d.max)} y1={cy - 5} x2={x(d.max)} y2={cy + 5} stroke={col} opacity={0.6} />
+            {/* box */}
+            <rect x={x(d.p25)} y={cy - 8} width={Math.max(1, x(d.p75) - x(d.p25))} height={16}
+              fill={col} opacity={0.28} stroke={col} />
+            {/* median */}
+            <line x1={x(d.median)} y1={cy - 8} x2={x(d.median)} y2={cy + 8} stroke={col} strokeWidth={2} />
+            <text x={W - R + 6} y={cy + 4} fill={col} fontSize={11}>
+              {d.median >= 0 ? "+" : ""}{d.median.toFixed(2)}%
+            </text>
+          </g>
+        )
+      })}
+    </svg>
+  )
+}
+
 function Empty({ h }: { h: number }) {
   return <div style={{ height: h, display: "grid", placeItems: "center", color: TEXT }}>no data</div>
 }

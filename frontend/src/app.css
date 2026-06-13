@@ -771,3 +771,14 @@ button {
 .bench-hbar-track { position: relative; height: 12px; background: #0d1117; border-radius: 3px; }
 .bench-hbar-fill { position: absolute; top: 0; height: 100%; border-radius: 3px; }
 .bench-hbar-val { text-align: right; font-variant-numeric: tabular-nums; }
+
+/* --- Benchmark compare view --- */
+.bench-tabs { display: flex; gap: 4px; margin-left: 10px; }
+.bench-tabs button { background: #21262d; color: #8b949e; border: 1px solid #30363d; border-radius: 6px; padding: 5px 12px; font-size: 13px; cursor: pointer; }
+.bench-tabs button:hover { background: #30363d; color: #c9d1d9; }
+.bench-tabs button.active { background: #1f6feb; color: #fff; border-color: #1f6feb; }
+.bench-heat { border-collapse: collapse; font-size: 11px; font-variant-numeric: tabular-nums; }
+.bench-heat th, .bench-heat td { padding: 4px 7px; text-align: right; white-space: nowrap; border: 1px solid #0d1117; }
+.bench-heat thead th { position: sticky; top: 0; background: #161b22; color: #8b949e; z-index: 1; }
+.bench-heat-label { text-align: left !important; color: #c9d1d9; background: #161b22; position: sticky; left: 0; }
+.bench-heat td.win { font-weight: 700; outline: 1px solid #c9d1d9; }

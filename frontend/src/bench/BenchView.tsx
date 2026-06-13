@@ -1,18 +1,20 @@
 import { useEffect, useMemo, useState } from "react"
-import { benchApi, type AlgoSummary, type MarketAgg, type SessionRow } from "./api"
-import { Histogram, HBars } from "./charts"
+import { benchApi, type AlgoSummary, type MarketAgg, type SessionRow, type Compare } from "./api"
+import { Histogram, HBars, BoxPlot } from "./charts"
 
 /** Benchmark dashboard (pc-benchmark-runner). Read-only: every view is a query
- * over the bot's bench endpoints. Lands on the algo leaderboard, drills into an
- * algo's per-market bars + per-window return distribution, then a market's
- * sessions. No writes. */
+ * over the bot's bench endpoints. Two modes: per-algo (leaderboard → drill into
+ * distribution + per-market bars) and compare (box-plots + winner heatmap across
+ * all algos on the shared windows). No writes. */
 export default function BenchView({ onBack }: { onBack: () => void }) {
+  const [mode, setMode] = useState<"algos" | "compare">("algos")
   const [algos, setAlgos] = useState<AlgoSummary[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [selected, setSelected] = useState<AlgoSummary | null>(null)
   const [markets, setMarkets] = useState<MarketAgg[]>([])
   const [sessions, setSessions] = useState<SessionRow[]>([])
   const [market, setMarket] = useState<string | null>(null)
+  const [compare, setCompare] = useState<Compare | null>(null)
 
   useEffect(() => {
     benchApi.algos().then((a) => {
@@ -29,18 +31,35 @@ export default function BenchView({ onBack }: { onBack: () => void }) {
       .catch((e) => setError(String(e.message ?? e)))
   }, [selected])
 
+  useEffect(() => {
+    if (mode === "compare" && !compare) {
+      benchApi.compare().then(setCompare).catch((e) => setError(String(e.message ?? e)))
+    }
+  }, [mode, compare])
+
   const shown = useMemo(
     () => (market ? sessions.filter((s) => s.market === market) : sessions),
     [sessions, market],
   )
   const returns = useMemo(() => shown.map((s) => s.return_pct), [shown])
 
-  if (error) return <Shell onBack={onBack}><div className="bench-error">⚠ {error}</div></Shell>
-  if (!algos) return <Shell onBack={onBack}><div className="bench-muted">loading…</div></Shell>
-  if (!algos.length) return <Shell onBack={onBack}><div className="bench-muted">No benchmark results yet. Run <code>start.sh &lt;algo&gt;</code>.</div></Shell>
+  const tabs = (
+    <div className="bench-tabs">
+      <button className={mode === "algos" ? "active" : ""} onClick={() => setMode("algos")}>Per-algo</button>
+      <button className={mode === "compare" ? "active" : ""} onClick={() => setMode("compare")}>Compare algos</button>
+    </div>
+  )
+
+  if (error) return <Shell onBack={onBack} tabs={tabs}><div className="bench-error">⚠ {error}</div></Shell>
+  if (!algos) return <Shell onBack={onBack} tabs={tabs}><div className="bench-muted">loading…</div></Shell>
+  if (!algos.length) return <Shell onBack={onBack} tabs={tabs}><div className="bench-muted">No benchmark results yet. Run <code>start.sh &lt;algo&gt;</code>.</div></Shell>
+
+  if (mode === "compare") {
+    return <Shell onBack={onBack} tabs={tabs}>{compare ? <CompareView c={compare} /> : <div className="bench-muted">loading…</div>}</Shell>
+  }
 
   return (
-    <Shell onBack={onBack}>
+    <Shell onBack={onBack} tabs={tabs}>
       {/* Algo leaderboard */}
       <section className="bench-card">
         <h3>Algo leaderboard <span className="bench-muted">· median return per window</span></h3>
@@ -105,12 +124,68 @@ export default function BenchView({ onBack }: { onBack: () => void }) {
   )
 }
 
-function Shell({ children, onBack }: { children: React.ReactNode; onBack: () => void }) {
+/** Cross-algo comparison on the shared windows. */
+function CompareView({ c }: { c: Compare }) {
+  const order = c.algos.map((a) => a.algo)
+  // best algo per market (for highlight)
+  const best = useMemo(() => {
+    const m: Record<string, string> = {}
+    for (const mkt of c.markets) {
+      let ba = order[0], bv = -Infinity
+      for (const a of order) {
+        const v = c.matrix[a]?.[mkt]
+        if (v != null && v > bv) { bv = v; ba = a }
+      }
+      m[mkt] = ba
+    }
+    return m
+  }, [c, order])
+
+  return (
+    <>
+      <section className="bench-card">
+        <h3>Return distribution by algo <span className="bench-muted">· box = p25–p75, line = median, whiskers = min–max · identical windows</span></h3>
+        <BoxPlot items={c.algos.map((a) => ({ algo: a.algo, min: a.min, p25: a.p25, median: a.median, p75: a.p75, max: a.max }))} />
+      </section>
+
+      <section className="bench-card">
+        <h3>Per-market winner heatmap <span className="bench-muted">· avg return per algo; ★ = best on that market</span></h3>
+        <div className="bench-scroll">
+          <table className="bench-heat">
+            <thead>
+              <tr><th>market</th>{order.map((a) => <th key={a}>{a}</th>)}</tr>
+            </thead>
+            <tbody>
+              {c.markets.map((mkt) => (
+                <tr key={mkt}>
+                  <td className="bench-heat-label">{mkt}</td>
+                  {order.map((a) => {
+                    const v = c.matrix[a]?.[mkt]
+                    return (
+                      <td key={a} style={{ background: cellColor(v) }}
+                        className={best[mkt] === a ? "win" : ""}>
+                        {v == null ? "" : `${v >= 0 ? "+" : ""}${v.toFixed(2)}`}
+                        {best[mkt] === a ? " ★" : ""}
+                      </td>
+                    )
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </>
+  )
+}
+
+function Shell({ children, onBack, tabs }: { children: React.ReactNode; onBack: () => void; tabs?: React.ReactNode }) {
   return (
     <div className="bench-root">
       <header className="bench-head">
         <button className="bench-chip" onClick={onBack}>← trading</button>
         <h2>Benchmarks</h2>
+        {tabs}
       </header>
       <div className="bench-body">{children}</div>
     </div>
@@ -124,6 +199,12 @@ function Stat({ label, v, pct }: { label: string; v: number; pct?: boolean }) {
       <b className={v >= 0 ? "pos" : "neg"}>{v >= 0 ? "+" : ""}{v.toFixed(2)}{pct ? "%" : ""}</b>
     </div>
   )
+}
+
+function cellColor(v: number | undefined): string {
+  if (v == null) return "transparent"
+  const c = Math.max(-2, Math.min(2, v)) / 2 // -1..1
+  return c >= 0 ? `rgba(63,185,80,${0.1 + 0.55 * c})` : `rgba(248,81,73,${0.1 + 0.55 * -c})`
 }
 
 const mean = (xs: number[]) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : 0)

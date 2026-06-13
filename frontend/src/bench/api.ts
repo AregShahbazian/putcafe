@@ -50,8 +50,26 @@ export interface SessionRow {
   bust: boolean
 }
 
+export interface AlgoBox {
+  algo: string
+  n: number
+  min: number
+  p25: number
+  median: number
+  p75: number
+  max: number
+  mean: number
+}
+
+export interface Compare {
+  algos: AlgoBox[]
+  markets: string[]
+  matrix: Record<string, Record<string, number>>
+}
+
 export const benchApi = {
   algos: () => get<{ algos: AlgoSummary[] }>("/api/bot/bench/algos").then((r) => r.algos),
+  compare: () => get<Compare>("/api/bot/bench/compare"),
   markets: (configHash: string) =>
     get<{ markets: MarketAgg[] }>(`/api/bot/bench/markets?config_hash=${configHash}`).then((r) => r.markets),
   sessions: (configHash: string, market?: string) =>
