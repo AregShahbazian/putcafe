@@ -2,7 +2,7 @@
 # RUN ON YOUR LAPTOP. Export a spec's results to Parquet on the VPS, then copy it
 # back to ./out/.
 #   ./scripts/dev/local/bench/export.sh <spec>
-#   e.g. ./scripts/dev/local/bench/export.sh pivot-map
+#   e.g. ./scripts/dev/local/bench/export.sh bollinger
 set -euo pipefail
 [ $# -ge 1 ] || { echo "usage: export.sh <spec>" >&2; exit 2; }
 here="$(cd "$(dirname "$0")" && pwd)"

@@ -60,7 +60,7 @@ services:
     profiles: ["bench"]
     environment:
       BOT_URL: http://bot:8102
-      BENCH_SPEC: ${BENCH_SPEC:-algo-compare}
+      BENCH_SPEC: ${BENCH_SPEC:-donchian}
     volumes:
       - candledata:/data
     depends_on:

@@ -2,7 +2,7 @@
 # RUN ON YOUR LAPTOP. Build + print the leaderboard for a spec on the VPS, then
 # copy the .md report back to ./out/.
 #   ./scripts/dev/local/bench/leaderboard.sh <spec> [metric]
-#   e.g. ./scripts/dev/local/bench/leaderboard.sh pivot-map return_pct
+#   e.g. ./scripts/dev/local/bench/leaderboard.sh bollinger return_pct
 set -euo pipefail
 [ $# -ge 1 ] || { echo "usage: leaderboard.sh <spec> [metric]" >&2; exit 2; }
 here="$(cd "$(dirname "$0")" && pwd)"

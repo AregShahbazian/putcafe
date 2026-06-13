@@ -19,7 +19,7 @@ dc() { docker compose --profile bench "$@"; }
 cmd="${1:-}"; shift || true
 case "$cmd" in
   start|resume)
-    spec="${1:-algo-compare}"
+    spec="${1:-donchian}"
     echo "running spec: $spec"
     BENCH_SPEC="$spec" dc up -d --build bench
     echo "bench job running; follow with: monitor"

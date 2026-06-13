@@ -86,29 +86,30 @@ Each session writes one row to `/data/bench/results.db` carrying its
 `config_hash` + `corpus_manifest_ref`, so any result is re-derivable and
 exportable to Parquet for ML/NN training.
 
-A run is driven by a committed JSON **spec** under `backend/bench/specs/`:
-
-- **benchmark** — one algo + one fixed config across many markets/ranges
-  (algo comparison), e.g. `algo-compare.json`.
-- **benchmark-map** — a config *grid* of one algo (any list-valued knob is a
-  sweep axis), e.g. `pivot-map.json` (tuning).
+A run is driven by a committed JSON **spec** under `backend/bench/specs/` —
+**one spec per algo** (`donchian.json`, `bollinger.json`, `macd.json`,
+`ma_cross.json`, `rsi_revert.json`, `dca.json`, `pivot.json`), each a fixed
+config (tuned defaults) over the deep-history exchanges' majors at 1h. The spec
+name **is** the algo, so `start.sh <algo>` selects it.
 
 Range modes per market: `full` (whole stored history), `window` (explicit
-`[start,end]`), or `random` — N dice-rolled windows (seeded; the *resolved
-absolute* range is stored, so reproducibility holds). Grids past
-`BENCH_SESSION_CAP` (10k) need `--force`.
+`[start,end]`), or `random` — N windows seeded **per `(exchange, market,
+resolution)`** so every algo is scored on *identical* slices; the resolved
+absolute ranges are stored, so reproducibility holds. (A spec can still carry a
+config *grid* — any list-valued knob — for a benchmark-map; capped at
+`BENCH_SESSION_CAP` (10k), `--force` to exceed.)
 
 Operate it from the laptop (thin SSH wrappers; resumes by skipping stored
 sessions, so everything is safe to re-run):
 
 ```bash
-./scripts/dev/local/bench/start.sh algo-compare     # run a spec (detached)
+./scripts/dev/local/bench/start.sh donchian         # benchmark one algo (detached)
 ./scripts/dev/local/bench/status.sh                 # container + progress + disk + manifests
 ./scripts/dev/local/bench/monitor.sh                # follow logs (Ctrl-C detaches)
 ./scripts/dev/local/bench/stop.sh                   # graceful stop (writes manifest)
-./scripts/dev/local/bench/leaderboard.sh pivot-map return_pct
+./scripts/dev/local/bench/leaderboard.sh donchian return_pct
                                                     # ranked report → ./scripts/dev/local/bench/out/
-./scripts/dev/local/bench/export.sh pivot-map       # Parquet of results → ./out/
+./scripts/dev/local/bench/export.sh donchian        # Parquet of results → ./out/
 ```
 
 Like `scrape`, `bench` is a compose profile — the normal stack `up` never

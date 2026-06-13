@@ -9,6 +9,7 @@ fatal. SIGTERM/SIGINT stop cleanly and still write the manifest."""
 
 import argparse
 import asyncio
+import hashlib
 import json
 import os
 import random
@@ -44,11 +45,22 @@ def _markets_for(sel: dict, exchange: str, resolution: str) -> list[str]:
     return out
 
 
+def _market_seed(base_seed, exchange: str, market: str, resolution: str) -> int:
+    """Deterministic per-market RNG seed from (base_seed, exchange, market,
+    resolution) ONLY — independent of algo, config, and run order. This is the
+    fairness lever: every algo/run draws the *same* windows for a given market,
+    so they are scored on identical data slices (testing-plan rule 2)."""
+    h = hashlib.sha256(
+        f"{base_seed}|{exchange}|{market}|{resolution}".encode()).hexdigest()
+    return int(h[:16], 16)
+
+
 def _windows(rng: dict, exchange: str, market: str, resolution: str,
-             rand: random.Random) -> list[tuple[int, int]]:
-    """Resolve a market's session ranges per the spec's range mode. Random draws
-    consume `rand` here (enumeration time) so the resolved absolute ranges are
-    stable across reruns."""
+             base_seed) -> list[tuple[int, int]]:
+    """Resolve a market's session ranges per the spec's range mode. Random
+    windows are drawn from a per-market RNG seeded only by the market identity
+    (see _market_seed), so the resolved absolute ranges are stable across reruns
+    AND identical across algos/configs."""
     mode = rng.get("mode", "full")
     if mode == "window":
         return [(int(rng["start"]), int(rng["end"]))]
@@ -62,6 +74,7 @@ def _windows(rng: dict, exchange: str, market: str, resolution: str,
         from .randoms import roll_random_range
         interval = config.RESOLUTION_S[resolution]
         n = int(rng.get("n", 10))
+        rand = random.Random(_market_seed(base_seed, exchange, market, resolution))
         out = []
         for _ in range(n):
             try:
@@ -83,7 +96,8 @@ def build_sessions(sp: spec_mod.Spec) -> list[dict]:
     exchanges = sel.get("exchanges", ["*"])
     if exchanges == ["*"] or "*" in exchanges:
         exchanges = candles.list_exchanges()
-    rand = random.Random(sp.range.get("seed", 0))
+    base_seed = sp.range.get("seed", 0)
+    win_cache: dict = {}  # (exchange,market,resolution) → windows, shared across configs
     sessions = []
     for cfg in sp.configs():
         chash = spec_mod.config_hash(cfg)
@@ -91,8 +105,11 @@ def build_sessions(sp: spec_mod.Spec) -> list[dict]:
         for exchange in exchanges:
             for resolution in resolutions:
                 for market in _markets_for(sel, exchange, resolution):
-                    for start, end in _windows(sp.range, exchange, market,
-                                               resolution, rand):
+                    key = (exchange, market, resolution)
+                    if key not in win_cache:
+                        win_cache[key] = _windows(
+                            sp.range, exchange, market, resolution, base_seed)
+                    for start, end in win_cache[key]:
                         sessions.append({
                             "config": cfg, "config_hash": chash,
                             "config_json": cjson, "algo": cfg["algo"],
@@ -146,9 +163,9 @@ async def _run_session(s: dict, st: status_mod.Status, manifest_ref, run_id,
 
 async def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--spec", default=os.environ.get("BENCH_SPEC", "algo-compare"),
+    ap.add_argument("--spec", default=os.environ.get("BENCH_SPEC", "donchian"),
                     help="spec name under specs/ (or path); "
-                         "defaults to $BENCH_SPEC then 'algo-compare'")
+                         "defaults to $BENCH_SPEC then 'donchian'")
     ap.add_argument("--dry-run", action="store_true",
                     help="enumerate + count sessions, no engine calls")
     ap.add_argument("--force", action="store_true",
