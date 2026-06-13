@@ -118,7 +118,10 @@ def analyze(body: AnalyzeBody):
 def _bench_conn():
     if not os.path.exists(BENCH_DB):
         raise HTTPException(status_code=404, detail="no benchmark data yet")
-    return sqlite3.connect(f"file:{BENCH_DB}?mode=ro", uri=True)
+    # immutable=1, not just mode=ro: /data is a read-only mount, and SQLite
+    # cannot open a db on read-only media without it (SQLITE_CANTOPEN). The bot
+    # only reads a completed snapshot, so treating it as immutable is correct.
+    return sqlite3.connect(f"file:{BENCH_DB}?immutable=1", uri=True)
 
 
 def _median(xs: list[float]) -> float:
