@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 from . import algos, pivots
 
 CANDLE_DATA_DIR = os.environ.get("CANDLE_DATA_DIR", "/data")
+BENCH_DB = os.path.join(CANDLE_DATA_DIR, "bench", "results.db")
 
 app = FastAPI()
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
@@ -108,3 +109,100 @@ def analyze(body: AnalyzeBody):
     if not body.pivots.enabled:
         return {"pivots": None}
     return {"pivots": pivots.detect(candles, body.pivots.lookback, body.pivots.alternation)}
+
+
+# --- Benchmark results (pc-benchmark-runner) — read-only over results.db -------
+# The bench worker writes /data/bench/results.db; the bot mounts /data ro and
+# serves it to the benchmark UI. Same ro-sqlite pattern as /api/bot/candles.
+
+def _bench_conn():
+    if not os.path.exists(BENCH_DB):
+        raise HTTPException(status_code=404, detail="no benchmark data yet")
+    return sqlite3.connect(f"file:{BENCH_DB}?mode=ro", uri=True)
+
+
+def _median(xs: list[float]) -> float:
+    s = sorted(xs)
+    n = len(s)
+    if not n:
+        return 0.0
+    mid = n // 2
+    return s[mid] if n % 2 else (s[mid - 1] + s[mid]) / 2
+
+
+@app.get("/api/bot/bench/algos")
+def bench_algos():
+    """One summary row per algo (config_hash): session count + return / win /
+    drawdown aggregates. Powers the top-level leaderboard."""
+    conn = _bench_conn()
+    try:
+        rows = conn.execute(
+            "SELECT config_hash, algo, return_pct, win_rate, max_drawdown, bust"
+            " FROM results").fetchall()
+    finally:
+        conn.close()
+    by: dict = {}
+    for ch, algo, ret, win, dd, bust in rows:
+        g = by.setdefault((ch, algo), {"ret": [], "win": [], "dd": [], "bust": 0})
+        g["ret"].append(ret or 0.0)
+        g["win"].append(win or 0.0)
+        g["dd"].append(dd or 0.0)
+        g["bust"] += int(bust or 0)
+    out = [
+        {"config_hash": ch, "algo": algo, "sessions": len(g["ret"]),
+         "avg_return_pct": sum(g["ret"]) / len(g["ret"]),
+         "median_return_pct": _median(g["ret"]),
+         "best_return_pct": max(g["ret"]), "worst_return_pct": min(g["ret"]),
+         "avg_win_rate": sum(g["win"]) / len(g["win"]),
+         "avg_max_drawdown": sum(g["dd"]) / len(g["dd"]),
+         "busts": g["bust"]}
+        for (ch, algo), g in by.items()
+    ]
+    out.sort(key=lambda r: r["median_return_pct"], reverse=True)
+    return {"algos": out}
+
+
+@app.get("/api/bot/bench/markets")
+def bench_markets(config_hash: str):
+    """Per-(exchange,market,resolution) aggregates for one algo — drill-down."""
+    conn = _bench_conn()
+    try:
+        rows = conn.execute(
+            "SELECT exchange, market, resolution, COUNT(*), AVG(return_pct),"
+            " AVG(win_rate), AVG(max_drawdown) FROM results WHERE config_hash=?"
+            " GROUP BY exchange, market, resolution ORDER BY AVG(return_pct) DESC",
+            (config_hash,)).fetchall()
+    finally:
+        conn.close()
+    return {"markets": [
+        {"exchange": ex, "market": m, "resolution": r, "sessions": n,
+         "avg_return_pct": ar, "avg_win_rate": wr, "avg_max_drawdown": dd}
+        for ex, m, r, n, ar, wr, dd in rows
+    ]}
+
+
+@app.get("/api/bot/bench/sessions")
+def bench_sessions(config_hash: str, exchange: str | None = None,
+                   market: str | None = None, resolution: str | None = None):
+    """Raw per-window session rows (the distribution + table view)."""
+    q = ("SELECT exchange, market, resolution, range_start, range_end,"
+         " return_pct, win_rate, max_drawdown, trades, bust"
+         " FROM results WHERE config_hash=?")
+    params: list = [config_hash]
+    for col, val in (("exchange", exchange), ("market", market),
+                     ("resolution", resolution)):
+        if val:
+            q += f" AND {col}=?"
+            params.append(val)
+    q += " ORDER BY range_start"
+    conn = _bench_conn()
+    try:
+        rows = conn.execute(q, params).fetchall()
+    finally:
+        conn.close()
+    return {"sessions": [
+        {"exchange": ex, "market": m, "resolution": r,
+         "range_start": rs, "range_end": re_, "return_pct": ret,
+         "win_rate": win, "max_drawdown": dd, "trades": tr, "bust": bool(bust)}
+        for ex, m, r, rs, re_, ret, win, dd, tr, bust in rows
+    ]}
