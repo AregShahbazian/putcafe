@@ -41,6 +41,7 @@ def collect() -> list[dict]:
         try:
             markets = [m for (m,) in conn.execute(DISTINCT_MARKETS)]
             lo = hi = None
+            present = set()
             for m in markets:
                 # MIN and MAX as separate scalar subqueries — one aggregate each
                 # so SQLite uses the index seek (a single MIN(ts),MAX(ts) query
@@ -52,10 +53,18 @@ def collect() -> list[dict]:
                 if r[0] is not None:
                     lo = r[0] if lo is None else min(lo, r[0])
                     hi = r[1] if hi is None else max(hi, r[1])
+                # Which resolutions this shard has — indexed (market,resolution)
+                # seeks; stop probing once all are confirmed.
+                for res in config.RESOLUTIONS:
+                    if res not in present and conn.execute(
+                        "SELECT 1 FROM candles WHERE market=? AND resolution=? LIMIT 1",
+                        (m, res)).fetchone():
+                        present.add(res)
         finally:
             conn.close()
         rows.append({"exchange": ex, "markets": len(markets),
-                     "size_mb": size_mb, "span_1m": (lo, hi)})
+                     "size_mb": size_mb, "span_1m": (lo, hi),
+                     "resolutions": present})
     return rows
 
 
@@ -71,20 +80,23 @@ def render(data: list[dict]) -> str:
     rows = []
     for d in data:
         lo, hi = d["span_1m"]
+        res = " ".join(r for r in config.RESOLUTIONS if r in d["resolutions"]) or "—"
         rows.append((
             d["exchange"],
             str(d["markets"]),
             _size(d["size_mb"]),
+            res,
             f"{_iso(lo)} → {_iso(hi)}" if lo else "—",
         ))
-    headers = ("EXCHANGE", "MARKETS", "SIZE", "1m DATA SPAN")
-    w = [max(len(headers[i]), *(len(r[i]) for r in rows)) for i in range(4)]
+    headers = ("EXCHANGE", "MARKETS", "SIZE", "RESOLUTIONS", "1m DATA SPAN")
+    n = len(headers)
+    w = [max(len(headers[i]), *(len(r[i]) for r in rows)) for i in range(n)]
 
     def line(c):
-        return (f"  {c[0]:<{w[0]}}   {c[1]:>{w[1]}}   "
-                f"{c[2]:>{w[2]}}   {c[3]:<{w[3]}}")
+        return (f"  {c[0]:<{w[0]}}   {c[1]:>{w[1]}}   {c[2]:>{w[2]}}   "
+                f"{c[3]:<{w[3]}}   {c[4]:<{w[4]}}")
 
-    rule = "  " + "─" * (sum(w) + 9)
+    rule = "  " + "─" * (sum(w) + 3 * (n - 1))
     out = [
         f"  Candle corpus — {time.strftime('%Y-%m-%d %H:%M', time.gmtime())} UTC",
         f"  {len(data)} exchanges · {total_mk} markets · {_size(total_mb)} on disk",
