@@ -19,6 +19,7 @@ RESOLUTIONS = ["1m", "1h", "1d"]
 RESOLUTION_MS = {"1m": 60_000, "1h": 3_600_000, "1d": 86_400_000}
 
 PAGE_LIMIT = 1000     # fetch_ohlcv page size; ccxt clamps per exchange
+MAX_ERRORS_LOGGED = 25  # per exchange; the rest are counted, not stored
 
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
 MANIFEST_DIR = os.path.join(DATA_DIR, "manifests")

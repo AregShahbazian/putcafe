@@ -41,13 +41,18 @@ case "$cmd" in
     docker compose exec -T bot ls -1 /data/manifests 2>/dev/null || echo "(none)"
     ;;
   monitor)
+    # Self-refreshing dashboard (fetched vs estimated-total per exchange), not
+    # a log tail. Runs a throwaway container that reads the shared volume.
+    dc run --rm --no-deps -T scrape python -m scraper.render --watch
+    ;;
+  logs)
     dc logs -f --tail 50 scrape
     ;;
   export)
     dc run --rm --no-deps scrape python -m scraper.export "$@"
     ;;
   *)
-    echo "usage: scrape.sh <start|stop|resume|status|monitor|export <exchange> <market> <resolution> [start end]>" >&2
+    echo "usage: scrape.sh <start|stop|resume|status|monitor|logs|export <exchange> <market> <resolution> [start end]>" >&2
     exit 2
     ;;
 esac

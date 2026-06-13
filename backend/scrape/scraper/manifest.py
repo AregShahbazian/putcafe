@@ -62,7 +62,7 @@ def write(status) -> str:
     for ex, st in snap["exchanges"].items():
         lines.append(
             f"| {ex} | {st['markets_done']}/{len(st['markets'])} "
-            f"| {st['candles']} | {st['gaps']} | {len(st['errors'])} |"
+            f"| {st['candles']} | {st['gaps']} | {st.get('errors_total', len(st['errors']))} |"
         )
     lines += ["", "## Coverage", ""]
     for ex, rows in cov.items():

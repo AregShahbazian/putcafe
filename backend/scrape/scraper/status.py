@@ -22,7 +22,8 @@ class Status:
     def init_exchange(self, ex: str, markets: list[str]):
         self.exchanges[ex] = {
             "state": "running", "markets": markets, "markets_done": 0,
-            "current": None, "candles": 0, "gaps": 0, "errors": [],
+            "current": None, "candles": 0, "gaps": 0,
+            "errors": [], "errors_total": 0,
         }
 
     def snapshot(self) -> dict:

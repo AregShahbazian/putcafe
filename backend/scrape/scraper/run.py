@@ -13,33 +13,89 @@ import ccxt.async_support as ccxt_async
 from . import config, manifest, markets, status as status_mod, store
 
 
-def page_span_ms(resolution: str) -> int:
-    return config.PAGE_LIMIT * config.RESOLUTION_MS[resolution]
+SHRINK_TRIES = 3  # widen→narrow attempts before deciding the data is just absent
 
 
-async def scrape_market(exchange, conn, ex_state, symbol, resolution, stop):
-    tf_ms = config.RESOLUTION_MS[resolution]
-    now_ms = int(time.time() * 1000)
-    floor_ms = now_ms - config.YEARS * 365 * 86_400_000
+def _depthy(e) -> bool:
+    """True when the error clearly means 'history doesn't go back that far'
+    (vs. 'this request's window is too wide') — lets us jump instead of shrink."""
+    m = str(e).lower()
+    return "too long ago" in m or "points ago" in m or "too old" in m
+
+
+def _record(ex_state, msg: str):
+    ex_state["errors_total"] += 1
+    if len(ex_state["errors"]) < config.MAX_ERRORS_LOGGED:
+        ex_state["errors"].append(msg)
+
+
+async def _oldest_available(exchange, symbol, resolution, lo, hi, tf, stop):
+    """`lo` rejected as too-far-back, `hi` known good. Binary-search the oldest
+    `since` that still returns data — salvages depth-capped exchanges (e.g. gate
+    serves only the most recent N candles). Returns the ts (ms) or None."""
+    good = None
+    while hi - lo > config.PAGE_LIMIT * tf and not stop.is_set():
+        mid = (lo + hi) // 2
+        try:
+            r = await exchange.fetch_ohlcv(symbol, resolution, since=mid, limit=1)
+        except Exception:
+            lo = mid
+            continue
+        if r:
+            good, hi = r[0][0], mid
+        else:
+            lo = mid
+    return good
+
+
+async def scrape_market(exchange, conn, ex_state, symbol, resolution, stop, span_memo):
+    """Forward-page [since, until] windows. `until` keeps each request inside an
+    exchange's per-request span cap; on a `range` error we shrink the window
+    (remembered per resolution), on a `depth` error we jump forward to the
+    oldest reachable candle. Only closed bars are stored."""
+    tf = config.RESOLUTION_MS[resolution]
+    now = int(time.time() * 1000)
+    end_cap = now - tf
+    floor = now - config.YEARS * 365 * 86_400_000
     wm = await asyncio.to_thread(store.watermark, conn, symbol, resolution)
-    since = max(wm + tf_ms, floor_ms) if wm else floor_ms
+    since = max(wm + tf, floor) if wm else floor
+    span = span_memo.get(resolution, config.PAGE_LIMIT * tf)
+    shrinks, jumped = 0, False
 
-    while since < now_ms - tf_ms and not stop.is_set():
-        rows = await exchange.fetch_ohlcv(symbol, resolution, since=since,
-                                          limit=config.PAGE_LIMIT)
-        # Drop the still-open bar — only closed candles are reproducible.
-        rows = [r for r in rows if r[0] is not None and r[0] <= now_ms - tf_ms]
+    while since < end_cap and not stop.is_set():
+        until = min(since + span, now)
+        try:
+            rows = await exchange.fetch_ohlcv(
+                symbol, resolution, since=since, limit=config.PAGE_LIMIT,
+                params={"until": until})
+        except Exception as e:
+            # First try narrowing the window a few times (handles per-request
+            # span caps); if that doesn't help, or the error says the data is
+            # simply too old, jump forward to the oldest candle still served.
+            if not _depthy(e) and shrinks < SHRINK_TRIES and span > tf * 4:
+                span = max(tf * 4, span // 4)
+                span_memo[resolution] = span
+                shrinks += 1
+                continue
+            if not jumped:
+                jumped = True
+                nxt = await _oldest_available(exchange, symbol, resolution,
+                                              since, end_cap, tf, stop)
+                if nxt and nxt > since:
+                    ex_state["gaps"] += 1
+                    since = nxt
+                    continue
+            _record(ex_state, f"{symbol} {resolution}: {e}")
+            return
+        shrinks = 0
+        rows = [r for r in rows if r[0] is not None and r[0] <= end_cap]
         if not rows:
-            ex_state["gaps"] += 1
-            since += page_span_ms(resolution)
+            since = until + tf
             continue
         ex_state["candles"] += await asyncio.to_thread(
             store.upsert, conn, symbol, resolution, rows)
         last = rows[-1][0]
-        if last + tf_ms <= since:  # no forward progress — bail out of the pair
-            ex_state["errors"].append(f"{symbol} {resolution}: stuck at ts {last}")
-            return
-        since = last + tf_ms
+        since = last + tf if last + tf > since else until + tf
 
 
 async def scrape_exchange(ex_id, st, stop, resolutions, dry_run):
@@ -55,6 +111,7 @@ async def scrape_exchange(ex_id, st, stop, resolutions, dry_run):
             ex_state["state"] = "dry-run"
             return
         conn = await asyncio.to_thread(store.open_shard, ex_id)
+        span_memo: dict = {}
         try:
             for symbol in selected:
                 if stop.is_set():
@@ -65,9 +122,9 @@ async def scrape_exchange(ex_id, st, stop, resolutions, dry_run):
                         break
                     try:
                         await scrape_market(exchange, conn, ex_state,
-                                            symbol, resolution, stop)
+                                            symbol, resolution, stop, span_memo)
                     except Exception as e:
-                        ex_state["errors"].append(f"{symbol} {resolution}: {e}")
+                        _record(ex_state, f"{symbol} {resolution}: {e}")
                 ex_state["markets_done"] += 1
             ex_state["current"] = None
             ex_state["state"] = "stopped" if stop.is_set() else "done"
@@ -76,10 +133,10 @@ async def scrape_exchange(ex_id, st, stop, resolutions, dry_run):
     except Exception as e:
         if ex_id in st.exchanges:
             st.exchanges[ex_id]["state"] = "failed"
-            st.exchanges[ex_id]["errors"].append(str(e))
+            _record(st.exchanges[ex_id], str(e))
         else:
             st.init_exchange(ex_id, [])
-            st.exchanges[ex_id].update(state="failed", errors=[str(e)])
+            st.exchanges[ex_id].update(state="failed", errors=[str(e)], errors_total=1)
     finally:
         if exchange is not None:
             await exchange.close()

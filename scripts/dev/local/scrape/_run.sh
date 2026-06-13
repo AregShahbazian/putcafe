@@ -10,5 +10,9 @@ source "$_scrape_here/../edge/_conn.sh"
 
 scrape_remote() {
   scp_ -q "$_remote/scrape.sh" "$CONN_USER@$CONN_IP:/root/putcafe/scrape.sh"
-  ssh_ "bash /root/putcafe/scrape.sh $(printf '%q ' "$@")"
+  if [ "${SCRAPE_TTY:-0}" = 1 ]; then
+    ssh_ -t "bash /root/putcafe/scrape.sh $(printf '%q ' "$@")"
+  else
+    ssh_ "bash /root/putcafe/scrape.sh $(printf '%q ' "$@")"
+  fi
 }
