@@ -131,34 +131,39 @@ def _run_engine(body: dict) -> dict:
 
 async def _run_session(s: dict, st: status_mod.Status, manifest_ref, run_id,
                        sem: asyncio.Semaphore, stop: asyncio.Event,
-                       conn) -> None:
+                       conn, db_lock: asyncio.Lock) -> None:
     async with sem:
         if stop.is_set():
             return
         st.current = f"{s['exchange']} {s['market']} {s['resolution']}"
-        rows = await asyncio.to_thread(
-            candles.slice, s["exchange"], s["market"], s["resolution"],
-            s["range_start"], s["range_end"])
-        if not rows:
-            st.gaps += 1
-            return
-        body = {"candles": rows, "algo": s["algo"],
-                "params": s["config"]["params"], "pivots": s["config"]["pivots"]}
         try:
+            rows = await asyncio.to_thread(
+                candles.slice, s["exchange"], s["market"], s["resolution"],
+                s["range_start"], s["range_end"])
+            if not rows:
+                st.gaps += 1
+                return
+            body = {"candles": rows, "algo": s["algo"],
+                    "params": s["config"]["params"], "pivots": s["config"]["pivots"]}
             snapshot = await asyncio.to_thread(_run_engine, body)
-        except (urllib.error.URLError, OSError, ValueError) as e:
+            sb = float(s["config"]["params"].get("startingBalance", 1000.0))
+            row = {
+                **{k: s[k] for k in ("config_hash", "exchange", "market",
+                                     "resolution", "range_start", "range_end",
+                                     "algo", "config_json")},
+                "corpus_manifest_ref": manifest_ref, "run_id": run_id,
+                "created_ts": int(time.time()), **metrics.compute(snapshot, sb),
+            }
+            # One shared results connection, many concurrent workers → serialize
+            # writes: sqlite's per-connection transaction state isn't safe under
+            # concurrent execute/commit (would crash "no transaction is active").
+            async with db_lock:
+                await asyncio.to_thread(store.upsert, conn, row)
+            st.done += 1
+        except Exception as e:
+            # A single bad session must never kill the whole run (gather would
+            # propagate). Record and move on.
             st.record_error(f"{st.current}: {e}")
-            return
-        sb = float(s["config"]["params"].get("startingBalance", 1000.0))
-        row = {
-            **{k: s[k] for k in ("config_hash", "exchange", "market",
-                                 "resolution", "range_start", "range_end",
-                                 "algo", "config_json")},
-            "corpus_manifest_ref": manifest_ref, "run_id": run_id,
-            "created_ts": int(time.time()), **metrics.compute(snapshot, sb),
-        }
-        await asyncio.to_thread(store.upsert, conn, row)
-        st.done += 1
 
 
 async def main():
@@ -212,9 +217,11 @@ async def main():
         loop.add_signal_handler(sig, stop.set)
 
     sem = asyncio.Semaphore(config.CONCURRENCY)
+    db_lock = asyncio.Lock()
     writer = asyncio.create_task(status_mod.writer(st, stop))
     await asyncio.gather(*(
-        _run_session(s, st, manifest_ref, run_id, sem, stop, conn) for s in todo))
+        _run_session(s, st, manifest_ref, run_id, sem, stop, conn, db_lock)
+        for s in todo))
 
     st.state = "stopped" if stop.is_set() else "done"
     st.current = None
