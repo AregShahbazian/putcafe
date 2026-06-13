@@ -76,3 +76,40 @@ shard watermarks, so everything is safe to re-run):
 Stored candles are served by the bot:
 `GET /api/bot/candles?exchange&market&resolution&start&end` (epoch-seconds,
 end exclusive) — 404 `not in store` when missing, never a live fallback.
+
+## Benchmark runner (algo evaluation)
+
+`backend/bench/` replays an algo over many slices of the stored corpus and
+ranks the results — reproducibly. It reuses the engine over the internal
+network (POST `bot:/api/bot/futures/run`); no backtest math is re-implemented.
+Each session writes one row to `/data/bench/results.db` carrying its
+`config_hash` + `corpus_manifest_ref`, so any result is re-derivable and
+exportable to Parquet for ML/NN training.
+
+A run is driven by a committed JSON **spec** under `backend/bench/specs/`:
+
+- **benchmark** — one algo + one fixed config across many markets/ranges
+  (algo comparison), e.g. `algo-compare.json`.
+- **benchmark-map** — a config *grid* of one algo (any list-valued knob is a
+  sweep axis), e.g. `pivot-map.json` (tuning).
+
+Range modes per market: `full` (whole stored history), `window` (explicit
+`[start,end]`), or `random` — N dice-rolled windows (seeded; the *resolved
+absolute* range is stored, so reproducibility holds). Grids past
+`BENCH_SESSION_CAP` (10k) need `--force`.
+
+Operate it from the laptop (thin SSH wrappers; resumes by skipping stored
+sessions, so everything is safe to re-run):
+
+```bash
+./scripts/dev/local/bench/start.sh algo-compare     # run a spec (detached)
+./scripts/dev/local/bench/status.sh                 # container + progress + disk + manifests
+./scripts/dev/local/bench/monitor.sh                # follow logs (Ctrl-C detaches)
+./scripts/dev/local/bench/stop.sh                   # graceful stop (writes manifest)
+./scripts/dev/local/bench/leaderboard.sh pivot-map return_pct
+                                                    # ranked report → ./scripts/dev/local/bench/out/
+./scripts/dev/local/bench/export.sh pivot-map       # Parquet of results → ./out/
+```
+
+Like `scrape`, `bench` is a compose profile — the normal stack `up` never
+starts it; the ops scripts do.

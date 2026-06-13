@@ -50,6 +50,23 @@ services:
       - candledata:/data
     restart: "no"
 
+  # Benchmark runner (pc-benchmark-runner) — NOT part of the normal stack; runs
+  # only when started via scripts/dev/local/bench/. Replays algos over the stored
+  # corpus by calling bot's /futures/run, writing results under /data/bench/.
+  # Stop = compose stop (SIGTERM → manifest); resume = up again (skips stored
+  # sessions). Mounts the corpus rw but only ever writes under /data/bench/.
+  bench:
+    build: ./bench
+    profiles: ["bench"]
+    environment:
+      BOT_URL: http://bot:8102
+      BENCH_SPEC: ${BENCH_SPEC:-algo-compare}
+    volumes:
+      - candledata:/data
+    depends_on:
+      - bot
+    restart: "no"
+
 volumes:
   dbdata:
   candledata:

@@ -1,0 +1,19 @@
+{
+  "algo": "pivot",
+  "params": {
+    "quoteAmount": 100,
+    "leverage": 1,
+    "tpSlRatio": 2,
+    "slCapPct": 4,
+    "feesEnabled": true,
+    "startingBalance": 1000
+  },
+  "pivots": { "enabled": true, "lookback": 3, "alternation": true },
+  "selector": {
+    "exchanges": ["*"],
+    "bases": ["BTC", "ETH"],
+    "quotes": ["USDT", "USDC", "USD", "EUR"],
+    "resolutions": ["1h"]
+  },
+  "range": { "mode": "random", "n": 20, "minBars": 200, "maxBars": 1000, "seed": 42 }
+}
