@@ -43,8 +43,9 @@ async def scrape_market(exchange, conn, ex_state, symbol, resolution, stop):
 
 
 async def scrape_exchange(ex_id, st, stop, resolutions, dry_run):
-    exchange = getattr(ccxt_async, ex_id)({"enableRateLimit": True})
+    exchange = None
     try:
+        exchange = getattr(ccxt_async, ex_id)({"enableRateLimit": True})
         await exchange.load_markets()
         selected = await markets.select(exchange)
         st.init_exchange(ex_id, selected)
@@ -80,7 +81,8 @@ async def scrape_exchange(ex_id, st, stop, resolutions, dry_run):
             st.init_exchange(ex_id, [])
             st.exchanges[ex_id].update(state="failed", errors=[str(e)])
     finally:
-        await exchange.close()
+        if exchange is not None:
+            await exchange.close()
 
 
 async def main():

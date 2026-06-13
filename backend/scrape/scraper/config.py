@@ -5,7 +5,7 @@ import os
 
 EXCHANGES = [
     "binance", "bingx", "bitmart", "bitvavo", "bybit", "coinbase",
-    "cryptocom", "gateio", "hitbtc", "htx", "hyperliquid", "kraken",
+    "cryptocom", "gate", "hitbtc", "htx", "hyperliquid", "kraken",
     "kucoin", "mexc", "okx", "poloniex", "toobit", "woo",
 ]
 
