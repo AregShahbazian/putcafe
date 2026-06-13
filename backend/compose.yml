@@ -34,9 +34,22 @@ services:
       POSITIONS_URL: http://positions:8101
     ports:
       - "127.0.0.1:8102:8102"
+    volumes:
+      - candledata:/data:ro
     depends_on:
       - positions
     restart: unless-stopped
 
+  # Candle scraper (pc-candle-store) — NOT part of the normal stack; runs only
+  # when started via scripts/dev/local/scrape/. Stop = compose stop (SIGTERM →
+  # manifest); resume = up again (scraper continues from shard watermarks).
+  scrape:
+    build: ./scrape
+    profiles: ["scrape"]
+    volumes:
+      - candledata:/data
+    restart: "no"
+
 volumes:
   dbdata:
+  candledata:

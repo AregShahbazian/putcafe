@@ -4,11 +4,16 @@ returns the full snapshot — positions, the order ledger, trades, events, equit
 The frontend persists the snapshot to the positions-backend and reveals it by
 cursor in replay. No per-candle round-trips, no in-memory sessions; spot is gone."""
 
+import os
+import sqlite3
+
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from . import algos, pivots
+
+CANDLE_DATA_DIR = os.environ.get("CANDLE_DATA_DIR", "/data")
 
 app = FastAPI()
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
@@ -64,6 +69,33 @@ def futures_run(body: RunBody):
         raise HTTPException(status_code=400, detail=f"unknown algo: {body.algo}")
     candles = [c.model_dump() for c in body.candles]
     return algos.run(body.algo, candles, body.params, body.pivots)
+
+
+@app.get("/api/bot/candles")
+def candles(exchange: str, market: str, resolution: str, start: int, end: int):
+    """Stored candles from the scrape corpus (pc-candle-store). start/end are
+    epoch-seconds (end exclusive); shards keep epoch-ms. Missing shard or empty
+    range is a hard 404 — callers must never silently fall back to live data."""
+    shard = os.path.join(CANDLE_DATA_DIR, f"{exchange}.db")
+    if not os.path.exists(shard):
+        raise HTTPException(status_code=404, detail=f"not in store: no shard for {exchange}")
+    conn = sqlite3.connect(f"file:{shard}?mode=ro", uri=True)
+    try:
+        rows = conn.execute(
+            "SELECT ts, open, high, low, close, volume FROM candles"
+            " WHERE market=? AND resolution=? AND ts>=? AND ts<? ORDER BY ts",
+            (market, resolution, start * 1000, end * 1000),
+        ).fetchall()
+    finally:
+        conn.close()
+    if not rows:
+        raise HTTPException(
+            status_code=404,
+            detail=f"not in store: {exchange} {market} {resolution} [{start},{end})")
+    return {"candles": [
+        {"time": ts // 1000, "open": o, "high": h, "low": lo, "close": c, "volume": v}
+        for ts, o, h, lo, c, v in rows
+    ]}
 
 
 @app.post("/api/bot/analyze")

@@ -52,3 +52,27 @@ yarn e2e        # Playwright spec driving the bridge, dev server on :5183
 replay → playTo → chart assertions. Network-dependent (Binance klines + the
 backend in `VITE_API_BASE`). Uses system Chrome (`channel: "chrome"`) and its
 own port, so it never reuses another worktree's dev server.
+
+## Candle store (benchmark corpus)
+
+`backend/scrape/` scrapes historical OHLCV from 18 exchanges (ccxt, public
+endpoints) into per-exchange SQLite shards on the VPS `candledata` volume —
+the fixed, reproducible corpus that benchmark runs replay against. Scope is
+config (`scraper/config.py`): top-20 majors per exchange, last 2 years,
+1m/1h/1d. Each run writes a JSON+md manifest under `/data/manifests/`.
+
+Operate it from the laptop (thin SSH wrappers; the scraper resumes from its
+shard watermarks, so everything is safe to re-run):
+
+```bash
+./scripts/dev/local/scrape/start.sh     # kick off / resume (detached)
+./scripts/dev/local/scrape/status.sh    # container + progress + disk + manifests
+./scripts/dev/local/scrape/monitor.sh   # follow logs (Ctrl-C detaches, job keeps going)
+./scripts/dev/local/scrape/stop.sh      # graceful stop (writes manifest)
+./scripts/dev/local/scrape/export.sh binance BTC/USDT 1h 2025-01-01 2025-06-01
+                                        # Parquet slice → ./scripts/dev/local/scrape/exports/
+```
+
+Stored candles are served by the bot:
+`GET /api/bot/candles?exchange&market&resolution&start&end` (epoch-seconds,
+end exclusive) — 404 `not in store` when missing, never a live fallback.
