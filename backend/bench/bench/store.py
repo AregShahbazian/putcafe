@@ -42,7 +42,11 @@ CREATE TABLE IF NOT EXISTS results (
 def open_db() -> sqlite3.Connection:
     os.makedirs(config.BENCH_DIR, exist_ok=True)
     conn = sqlite3.connect(config.RESULTS_DB, check_same_thread=False)
-    conn.execute("PRAGMA journal_mode=WAL")
+    # DELETE (rollback) journal, NOT WAL: the bot reads results.db from a
+    # read-only mount, and a WAL reader must write the -shm sidecar → fails ro
+    # ("unable to open database file"). DELETE leaves no sidecars, so ro reads
+    # work. Writes are serialized by the runner's lock, so we don't need WAL.
+    conn.execute("PRAGMA journal_mode=DELETE")
     conn.execute("PRAGMA synchronous=NORMAL")
     conn.execute("PRAGMA busy_timeout=5000")
     conn.executescript(SCHEMA)
