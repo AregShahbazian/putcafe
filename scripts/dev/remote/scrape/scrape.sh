@@ -48,11 +48,16 @@ case "$cmd" in
   logs)
     dc logs -f --tail 50 scrape
     ;;
+  overview)
+    # What candle data we actually have, per exchange/resolution. --log writes
+    # a timestamped snapshot to /data/overviews/.
+    dc run --rm --no-deps -T scrape python -m scraper.overview "$@"
+    ;;
   export)
     dc run --rm --no-deps scrape python -m scraper.export "$@"
     ;;
   *)
-    echo "usage: scrape.sh <start|stop|resume|status|monitor|logs|export <exchange> <market> <resolution> [start end]>" >&2
+    echo "usage: scrape.sh <start|stop|resume|status|monitor|logs|overview [--log]|export <exchange> <market> <resolution> [start end]>" >&2
     exit 2
     ;;
 esac

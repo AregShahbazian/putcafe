@@ -3,8 +3,10 @@ Widen by editing here; nothing else hardcodes thresholds."""
 
 import os
 
+# bitmart + coinbase dropped: stingy rate limits / small page sizes made a 2y
+# 1m backfill impractically slow vs. the other 16.
 EXCHANGES = [
-    "binance", "bingx", "bitmart", "bitvavo", "bybit", "coinbase",
+    "binance", "bingx", "bitvavo", "bybit",
     "cryptocom", "gate", "hitbtc", "htx", "hyperliquid", "kraken",
     "kucoin", "mexc", "okx", "poloniex", "toobit", "woo",
 ]
