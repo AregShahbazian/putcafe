@@ -1,10 +1,11 @@
 import { useState } from "react"
-import type { PivotOptions } from "../api/backend"
+import type { AlgoName, AlgoParams, PivotOptions } from "../api/backend"
 import type { Preset } from "../util/presets"
 import type { EngineSnapshot } from "../backtest/engine"
 import { fetchKlinesRange } from "../binance/api"
 import { downloadJson, fileStamp } from "../util/download"
 import type { SavedCandle } from "../util/savedCandles"
+import { ALGO_META, INDICATOR_ALGOS, isIndicatorAlgo } from "../util/algos"
 
 export type PickerField = "start" | "end" | null
 
@@ -34,16 +35,25 @@ const leverageIndex = (lev: number) => {
 
 export interface PanelConfig {
   mode: "replay" | "headless"
-  algo: "dca" | "pivot"
+  algo: AlgoName
   quoteAmount: number
   frequencySec: number
   startingBalance: number
   feesEnabled: boolean
-  // Pivot-breakout strategy params (used when algo === "pivot").
+  // Bracket params — used by pivot and the indicator algos.
   tpSlRatio: number
   slCapPct: number
   positionSize: number
   leverage: number
+  // Indicator-algo knobs (fast/slow/period/…); keyed per the selected algo.
+  algoParams: AlgoParams
+}
+
+/** Switching to an indicator algo seeds its tuned defaults (params + bracket). */
+export function algoDefaults(algo: AlgoName): Partial<PanelConfig> {
+  const meta = ALGO_META[algo]
+  if (!meta) return { algoParams: {} }
+  return { algoParams: { ...meta.defaults }, slCapPct: meta.bracket.slCapPct, tpSlRatio: meta.bracket.tpSlRatio }
 }
 
 interface Props {
@@ -137,11 +147,55 @@ export default function BacktestPanel(p: Props) {
 
       <label className="field">
         Algorithm
-        <select value={config.algo} disabled={active} onChange={e => set({ algo: e.target.value as PanelConfig["algo"] })}>
+        <select
+          value={config.algo}
+          disabled={active}
+          onChange={e => {
+            const algo = e.target.value as AlgoName
+            set({ algo, ...algoDefaults(algo) }) // seed tuned defaults for indicator algos
+          }}
+        >
           <option value="dca">DCA</option>
           <option value="pivot">Pivot breakout</option>
+          {INDICATOR_ALGOS.map(a => (
+            <option key={a.value} value={a.value}>{a.label}</option>
+          ))}
         </select>
       </label>
+      {isIndicatorAlgo(config.algo) && (
+        <>
+          <p className="algo-blurb">{ALGO_META[config.algo].blurb}</p>
+          {ALGO_META[config.algo].params.map(spec =>
+            spec.type === "select" ? (
+              <label className="field" key={spec.key}>
+                {spec.label}
+                <select
+                  value={String(config.algoParams[spec.key] ?? spec.options![0])}
+                  disabled={pivotsLocked}
+                  onChange={e => set({ algoParams: { ...config.algoParams, [spec.key]: e.target.value } })}
+                >
+                  {spec.options!.map(o => <option key={o} value={o}>{o.toUpperCase()}</option>)}
+                </select>
+              </label>
+            ) : (
+              <label className="field" key={spec.key}>
+                {spec.label}
+                <input
+                  type="number"
+                  min={spec.min}
+                  step={spec.step ?? (spec.type === "int" ? 1 : 0.1)}
+                  value={Number(config.algoParams[spec.key] ?? 0)}
+                  disabled={pivotsLocked}
+                  onChange={e => {
+                    const raw = Number(e.target.value)
+                    set({ algoParams: { ...config.algoParams, [spec.key]: spec.type === "int" ? Math.floor(raw) : raw } })
+                  }}
+                />
+              </label>
+            ),
+          )}
+        </>
+      )}
       {config.algo === "dca" ? (
         <>
           <label className="field">

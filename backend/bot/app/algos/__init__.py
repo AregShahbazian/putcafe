@@ -2,9 +2,17 @@
 `run(engine, candles, params, pivot_options) -> pivots|None`."""
 
 from ..futures import FuturesEngine
-from . import dca, pivot
+from . import bollinger, dca, donchian, ma_cross, macd, pivot, rsi_revert
 
-ALGOS = {"dca": dca, "pivot": pivot}
+ALGOS = {
+    "dca": dca,
+    "pivot": pivot,
+    "ma_cross": ma_cross,
+    "rsi_revert": rsi_revert,
+    "bollinger": bollinger,
+    "donchian": donchian,
+    "macd": macd,
+}
 
 
 def run(algo: str, candles: list[dict], params, pivot_options) -> dict:
