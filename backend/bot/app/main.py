@@ -5,7 +5,10 @@ The frontend persists the snapshot to the positions-backend and reveals it by
 cursor in replay. No per-candle round-trips, no in-memory sessions; spot is gone."""
 
 import os
+import shutil
 import sqlite3
+import tempfile
+import time
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -112,16 +115,50 @@ def analyze(body: AnalyzeBody):
 
 
 # --- Benchmark results (pc-benchmark-runner) — read-only over results.db -------
-# The bench worker writes /data/bench/results.db; the bot mounts /data ro and
-# serves it to the benchmark UI. Same ro-sqlite pattern as /api/bot/candles.
+# The bench worker writes /data/bench/results.db (DELETE journal) while the bot
+# mounts /data ro and serves it to the UI. To make reads robust even *while a
+# benchmark is running* (so a page reload never errors), each request:
+#   1. copies the db to the container's writable /tmp (a stable snapshot) and
+#      reads that — /data is read-only media (plain mode=ro -> SQLITE_CANTOPEN),
+#      and reading a live-written file directly risks a torn read;
+#   2. retries a few times if the copy was caught mid-write (malformed);
+#   3. falls back to the last good result cached in-process, so a reload during
+#      a write window still returns 200 with slightly-stale data.
 
-def _bench_conn():
+_BENCH_CACHE: dict = {}
+
+
+def _bench_read(key: str, fn):
+    """Run fn(conn) against a stable /tmp snapshot of results.db, with retries
+    and a last-good cache so reads never error mid-run."""
     if not os.path.exists(BENCH_DB):
+        if key in _BENCH_CACHE:
+            return _BENCH_CACHE[key]
         raise HTTPException(status_code=404, detail="no benchmark data yet")
-    # immutable=1, not just mode=ro: /data is a read-only mount, and SQLite
-    # cannot open a db on read-only media without it (SQLITE_CANTOPEN). The bot
-    # only reads a completed snapshot, so treating it as immutable is correct.
-    return sqlite3.connect(f"file:{BENCH_DB}?immutable=1", uri=True)
+    last_err = None
+    for _ in range(5):
+        fd, tmp = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+        try:
+            shutil.copyfile(BENCH_DB, tmp)
+            conn = sqlite3.connect(f"file:{tmp}?mode=ro", uri=True)
+            try:
+                res = fn(conn)
+            finally:
+                conn.close()
+            _BENCH_CACHE[key] = res
+            return res
+        except (sqlite3.Error, OSError) as e:
+            last_err = e
+            time.sleep(0.1)  # likely caught a write mid-flight; retry a fresh copy
+        finally:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+    if key in _BENCH_CACHE:
+        return _BENCH_CACHE[key]
+    raise HTTPException(status_code=503, detail=f"benchmark data busy: {last_err}")
 
 
 def _median(xs: list[float]) -> float:
@@ -137,51 +174,47 @@ def _median(xs: list[float]) -> float:
 def bench_algos():
     """One summary row per algo (config_hash): session count + return / win /
     drawdown aggregates. Powers the top-level leaderboard."""
-    conn = _bench_conn()
-    try:
+    def query(conn):
         rows = conn.execute(
             "SELECT config_hash, algo, return_pct, win_rate, max_drawdown, bust"
             " FROM results").fetchall()
-    finally:
-        conn.close()
-    by: dict = {}
-    for ch, algo, ret, win, dd, bust in rows:
-        g = by.setdefault((ch, algo), {"ret": [], "win": [], "dd": [], "bust": 0})
-        g["ret"].append(ret or 0.0)
-        g["win"].append(win or 0.0)
-        g["dd"].append(dd or 0.0)
-        g["bust"] += int(bust or 0)
-    out = [
-        {"config_hash": ch, "algo": algo, "sessions": len(g["ret"]),
-         "avg_return_pct": sum(g["ret"]) / len(g["ret"]),
-         "median_return_pct": _median(g["ret"]),
-         "best_return_pct": max(g["ret"]), "worst_return_pct": min(g["ret"]),
-         "avg_win_rate": sum(g["win"]) / len(g["win"]),
-         "avg_max_drawdown": sum(g["dd"]) / len(g["dd"]),
-         "busts": g["bust"]}
-        for (ch, algo), g in by.items()
-    ]
-    out.sort(key=lambda r: r["median_return_pct"], reverse=True)
-    return {"algos": out}
+        by: dict = {}
+        for ch, algo, ret, win, dd, bust in rows:
+            g = by.setdefault((ch, algo), {"ret": [], "win": [], "dd": [], "bust": 0})
+            g["ret"].append(ret or 0.0)
+            g["win"].append(win or 0.0)
+            g["dd"].append(dd or 0.0)
+            g["bust"] += int(bust or 0)
+        out = [
+            {"config_hash": ch, "algo": algo, "sessions": len(g["ret"]),
+             "avg_return_pct": sum(g["ret"]) / len(g["ret"]),
+             "median_return_pct": _median(g["ret"]),
+             "best_return_pct": max(g["ret"]), "worst_return_pct": min(g["ret"]),
+             "avg_win_rate": sum(g["win"]) / len(g["win"]),
+             "avg_max_drawdown": sum(g["dd"]) / len(g["dd"]),
+             "busts": g["bust"]}
+            for (ch, algo), g in by.items()
+        ]
+        out.sort(key=lambda r: r["median_return_pct"], reverse=True)
+        return {"algos": out}
+    return _bench_read("algos", query)
 
 
 @app.get("/api/bot/bench/markets")
 def bench_markets(config_hash: str):
     """Per-(exchange,market,resolution) aggregates for one algo — drill-down."""
-    conn = _bench_conn()
-    try:
+    def query(conn):
         rows = conn.execute(
             "SELECT exchange, market, resolution, COUNT(*), AVG(return_pct),"
             " AVG(win_rate), AVG(max_drawdown) FROM results WHERE config_hash=?"
             " GROUP BY exchange, market, resolution ORDER BY AVG(return_pct) DESC",
             (config_hash,)).fetchall()
-    finally:
-        conn.close()
-    return {"markets": [
-        {"exchange": ex, "market": m, "resolution": r, "sessions": n,
-         "avg_return_pct": ar, "avg_win_rate": wr, "avg_max_drawdown": dd}
-        for ex, m, r, n, ar, wr, dd in rows
-    ]}
+        return {"markets": [
+            {"exchange": ex, "market": m, "resolution": r, "sessions": n,
+             "avg_return_pct": ar, "avg_win_rate": wr, "avg_max_drawdown": dd}
+            for ex, m, r, n, ar, wr, dd in rows
+        ]}
+    return _bench_read(f"markets:{config_hash}", query)
 
 
 @app.get("/api/bot/bench/sessions")
@@ -198,14 +231,13 @@ def bench_sessions(config_hash: str, exchange: str | None = None,
             q += f" AND {col}=?"
             params.append(val)
     q += " ORDER BY range_start"
-    conn = _bench_conn()
-    try:
+
+    def query(conn):
         rows = conn.execute(q, params).fetchall()
-    finally:
-        conn.close()
-    return {"sessions": [
-        {"exchange": ex, "market": m, "resolution": r,
-         "range_start": rs, "range_end": re_, "return_pct": ret,
-         "win_rate": win, "max_drawdown": dd, "trades": tr, "bust": bool(bust)}
-        for ex, m, r, rs, re_, ret, win, dd, tr, bust in rows
-    ]}
+        return {"sessions": [
+            {"exchange": ex, "market": m, "resolution": r,
+             "range_start": rs, "range_end": re_, "return_pct": ret,
+             "win_rate": win, "max_drawdown": dd, "trades": tr, "bust": bool(bust)}
+            for ex, m, r, rs, re_, ret, win, dd, tr, bust in rows
+        ]}
+    return _bench_read(f"sessions:{config_hash}:{exchange}:{market}:{resolution}", query)
