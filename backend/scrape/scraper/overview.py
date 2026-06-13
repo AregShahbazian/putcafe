@@ -14,8 +14,6 @@ import time
 
 from . import config
 
-SPAN_RES = "1m"
-
 # Loose index skip-scan: ~one seek per distinct market instead of walking the
 # whole clustered PK (market,resolution,ts).
 DISTINCT_MARKETS = """
@@ -40,31 +38,24 @@ def collect() -> list[dict]:
         conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
         try:
             markets = [m for (m,) in conn.execute(DISTINCT_MARKETS)]
-            lo = hi = None
-            present = set()
+            # Per-resolution date span across the shard's markets. MIN and MAX as
+            # separate scalar subqueries — one aggregate each so SQLite uses the
+            # index seek (a single MIN(ts),MAX(ts) query would scan every row).
+            spans = {res: [None, None] for res in config.RESOLUTIONS}
             for m in markets:
-                # MIN and MAX as separate scalar subqueries — one aggregate each
-                # so SQLite uses the index seek (a single MIN(ts),MAX(ts) query
-                # would scan every 1m row of the market instead).
-                r = conn.execute(
-                    "SELECT (SELECT MIN(ts) FROM candles WHERE market=? AND resolution=?),"
-                    "       (SELECT MAX(ts) FROM candles WHERE market=? AND resolution=?)",
-                    (m, SPAN_RES, m, SPAN_RES)).fetchone()
-                if r[0] is not None:
-                    lo = r[0] if lo is None else min(lo, r[0])
-                    hi = r[1] if hi is None else max(hi, r[1])
-                # Which resolutions this shard has — indexed (market,resolution)
-                # seeks; stop probing once all are confirmed.
                 for res in config.RESOLUTIONS:
-                    if res not in present and conn.execute(
-                        "SELECT 1 FROM candles WHERE market=? AND resolution=? LIMIT 1",
-                        (m, res)).fetchone():
-                        present.add(res)
+                    lo, hi = conn.execute(
+                        "SELECT (SELECT MIN(ts) FROM candles WHERE market=? AND resolution=?),"
+                        "       (SELECT MAX(ts) FROM candles WHERE market=? AND resolution=?)",
+                        (m, res, m, res)).fetchone()
+                    if lo is not None:
+                        s = spans[res]
+                        s[0] = lo if s[0] is None else min(s[0], lo)
+                        s[1] = hi if s[1] is None else max(s[1], hi)
         finally:
             conn.close()
         rows.append({"exchange": ex, "markets": len(markets),
-                     "size_mb": size_mb, "span_1m": (lo, hi),
-                     "resolutions": present})
+                     "size_mb": size_mb, "spans": spans})
     return rows
 
 
@@ -77,24 +68,26 @@ def render(data: list[dict]) -> str:
     total_mb = sum(d["size_mb"] for d in data)
     total_mk = sum(d["markets"] for d in data)
 
+    def span(s):
+        return f"{_iso(s[0])} → {_iso(s[1])}" if s[0] else "—"
+
     rows = []
     for d in data:
-        lo, hi = d["span_1m"]
-        res = " ".join(r for r in config.RESOLUTIONS if r in d["resolutions"]) or "—"
         rows.append((
             d["exchange"],
             str(d["markets"]),
             _size(d["size_mb"]),
-            res,
-            f"{_iso(lo)} → {_iso(hi)}" if lo else "—",
+            *(span(d["spans"][res]) for res in config.RESOLUTIONS),
         ))
-    headers = ("EXCHANGE", "MARKETS", "SIZE", "RESOLUTIONS", "1m DATA SPAN")
+    headers = ("EXCHANGE", "MARKETS", "SIZE",
+               *(f"{res} SPAN" for res in config.RESOLUTIONS))
     n = len(headers)
     w = [max(len(headers[i]), *(len(r[i]) for r in rows)) for i in range(n)]
 
     def line(c):
-        return (f"  {c[0]:<{w[0]}}   {c[1]:>{w[1]}}   {c[2]:>{w[2]}}   "
-                f"{c[3]:<{w[3]}}   {c[4]:<{w[4]}}")
+        cells = [f"{c[0]:<{w[0]}}", f"{c[1]:>{w[1]}}", f"{c[2]:>{w[2]}}"]
+        cells += [f"{c[3 + i]:<{w[3 + i]}}" for i in range(len(config.RESOLUTIONS))]
+        return "  " + "   ".join(cells)
 
     rule = "  " + "─" * (sum(w) + 3 * (n - 1))
     out = [
