@@ -17,6 +17,7 @@ async function get<T>(path: string): Promise<T> {
 export interface AlgoSummary {
   config_hash: string
   algo: string
+  config_json: string
   sessions: number
   avg_return_pct: number
   median_return_pct: number
@@ -51,7 +52,9 @@ export interface SessionRow {
 }
 
 export interface AlgoBox {
+  config_hash: string
   algo: string
+  config_json: string
   n: number
   min: number
   p25: number
@@ -65,6 +68,22 @@ export interface Compare {
   algos: AlgoBox[]
   markets: string[]
   matrix: Record<string, Record<string, number>>
+}
+
+/** Compact label for a config: algo + its tuning knobs. Distinguishes the rows
+ * of a benchmark-map sweep (same algo, different params). */
+export function configLabel(algo: string, configJson: string): string {
+  try {
+    const c = JSON.parse(configJson)
+    const p = c.params ?? {}
+    const parts: string[] = []
+    for (const [k, v] of Object.entries(p.algoParams ?? {})) parts.push(`${k}=${v}`)
+    if (p.tpSlRatio != null) parts.push(`tp${p.tpSlRatio}`)
+    if (p.slCapPct != null) parts.push(`sl${p.slCapPct}`)
+    return parts.length ? `${algo} · ${parts.join(" ")}` : algo
+  } catch {
+    return algo
+  }
 }
 
 export const benchApi = {

@@ -189,24 +189,26 @@ def bench_algos():
     drawdown aggregates. Powers the top-level leaderboard."""
     def query(conn):
         rows = conn.execute(
-            "SELECT config_hash, algo, return_pct, win_rate, max_drawdown, bust"
-            " FROM results").fetchall()
+            "SELECT config_hash, algo, config_json, return_pct, win_rate,"
+            " max_drawdown, bust FROM results").fetchall()
         by: dict = {}
-        for ch, algo, ret, win, dd, bust in rows:
-            g = by.setdefault((ch, algo), {"ret": [], "win": [], "dd": [], "bust": 0})
+        for ch, algo, cfg, ret, win, dd, bust in rows:
+            g = by.setdefault(ch, {"algo": algo, "config_json": cfg,
+                                   "ret": [], "win": [], "dd": [], "bust": 0})
             g["ret"].append(ret or 0.0)
             g["win"].append(win or 0.0)
             g["dd"].append(dd or 0.0)
             g["bust"] += int(bust or 0)
         out = [
-            {"config_hash": ch, "algo": algo, "sessions": len(g["ret"]),
+            {"config_hash": ch, "algo": g["algo"], "config_json": g["config_json"],
+             "sessions": len(g["ret"]),
              "avg_return_pct": sum(g["ret"]) / len(g["ret"]),
              "median_return_pct": _median(g["ret"]),
              "best_return_pct": max(g["ret"]), "worst_return_pct": min(g["ret"]),
              "avg_win_rate": sum(g["win"]) / len(g["win"]),
              "avg_max_drawdown": sum(g["dd"]) / len(g["dd"]),
              "busts": g["bust"]}
-            for (ch, algo), g in by.items()
+            for ch, g in by.items()
         ]
         out.sort(key=lambda r: r["median_return_pct"], reverse=True)
         return {"algos": out}
@@ -262,26 +264,28 @@ def bench_compare():
     slices). Returns box-plot stats per algo + a per-market avg-return matrix."""
     def query(conn):
         rows = conn.execute(
-            "SELECT algo, exchange, market, return_pct FROM results").fetchall()
-        per_algo: dict = {}
+            "SELECT config_hash, algo, config_json, exchange, market, return_pct"
+            " FROM results").fetchall()
+        per_cfg: dict = {}
         per_cell: dict = {}
         markets: set = set()
-        for algo, ex, m, ret in rows:
-            per_algo.setdefault(algo, []).append(ret or 0.0)
+        for ch, algo, cfg, ex, m, ret in rows:
+            g = per_cfg.setdefault(ch, {"algo": algo, "config_json": cfg, "ret": []})
+            g["ret"].append(ret or 0.0)
             mkt = f"{ex} {m}"
             markets.add(mkt)
-            per_cell.setdefault((algo, mkt), []).append(ret or 0.0)
+            per_cell.setdefault((ch, mkt), []).append(ret or 0.0)
         algos = []
-        for algo, xs in per_algo.items():
-            s = sorted(xs)
+        for ch, g in per_cfg.items():
+            s = sorted(g["ret"])
             algos.append({
-                "algo": algo, "n": len(s), "min": s[0], "max": s[-1],
+                "config_hash": ch, "algo": g["algo"], "config_json": g["config_json"],
+                "n": len(s), "min": s[0], "max": s[-1],
                 "p25": _pctile(s, 0.25), "median": _pctile(s, 0.5),
                 "p75": _pctile(s, 0.75), "mean": sum(s) / len(s)})
         algos.sort(key=lambda a: a["median"], reverse=True)
-        order = [a["algo"] for a in algos]
-        matrix = {algo: {} for algo in order}
-        for (algo, mkt), xs in per_cell.items():
-            matrix[algo][mkt] = sum(xs) / len(xs)
+        matrix = {ch: {} for ch in per_cfg}
+        for (ch, mkt), xs in per_cell.items():
+            matrix[ch][mkt] = sum(xs) / len(xs)
         return {"algos": algos, "markets": sorted(markets), "matrix": matrix}
     return _bench_read("compare", query)

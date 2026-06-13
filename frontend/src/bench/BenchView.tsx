@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react"
-import { benchApi, type AlgoSummary, type MarketAgg, type SessionRow, type Compare } from "./api"
+import { benchApi, configLabel, type AlgoSummary, type MarketAgg, type SessionRow, type Compare } from "./api"
 import { Histogram, HBars, BoxPlot } from "./charts"
 
 /** Benchmark dashboard (pc-benchmark-runner). Read-only: every view is a query
@@ -69,7 +69,7 @@ export default function BenchView({ onBack }: { onBack: () => void }) {
             {algos.map((a) => (
               <tr key={a.config_hash} className={selected?.config_hash === a.config_hash ? "active" : ""}
                 onClick={() => setSelected(a)} style={{ cursor: "pointer" }}>
-                <td><b>{a.algo}</b></td>
+                <td><b>{configLabel(a.algo, a.config_json)}</b></td>
                 <td>{a.sessions}</td>
                 <td className={a.median_return_pct >= 0 ? "pos" : "neg"}>{a.median_return_pct.toFixed(2)}</td>
                 <td className={a.avg_return_pct >= 0 ? "pos" : "neg"}>{a.avg_return_pct.toFixed(2)}</td>
@@ -124,19 +124,25 @@ export default function BenchView({ onBack }: { onBack: () => void }) {
   )
 }
 
-/** Cross-algo comparison on the shared windows. */
+/** Cross-config comparison on the shared windows. Columns are config_hashes
+ * (so a benchmark-map sweep's configs are distinct), labeled by their knobs. */
 function CompareView({ c }: { c: Compare }) {
-  const order = c.algos.map((a) => a.algo)
-  // best algo per market (for highlight)
+  const order = c.algos.map((a) => a.config_hash) // median-sorted
+  const label = useMemo(() => {
+    const m: Record<string, string> = {}
+    for (const a of c.algos) m[a.config_hash] = configLabel(a.algo, a.config_json)
+    return m
+  }, [c])
+  // best config per market (for highlight)
   const best = useMemo(() => {
     const m: Record<string, string> = {}
     for (const mkt of c.markets) {
-      let ba = order[0], bv = -Infinity
-      for (const a of order) {
-        const v = c.matrix[a]?.[mkt]
-        if (v != null && v > bv) { bv = v; ba = a }
+      let bh = order[0], bv = -Infinity
+      for (const h of order) {
+        const v = c.matrix[h]?.[mkt]
+        if (v != null && v > bv) { bv = v; bh = h }
       }
-      m[mkt] = ba
+      m[mkt] = bh
     }
     return m
   }, [c, order])
@@ -144,28 +150,28 @@ function CompareView({ c }: { c: Compare }) {
   return (
     <>
       <section className="bench-card">
-        <h3>Return distribution by algo <span className="bench-muted">· box = p25–p75, line = median, whiskers = min–max · identical windows</span></h3>
-        <BoxPlot items={c.algos.map((a) => ({ algo: a.algo, min: a.min, p25: a.p25, median: a.median, p75: a.p75, max: a.max }))} />
+        <h3>Return distribution <span className="bench-muted">· box = p25–p75, line = median, whiskers = min–max · identical windows</span></h3>
+        <BoxPlot items={c.algos.map((a) => ({ algo: label[a.config_hash], min: a.min, p25: a.p25, median: a.median, p75: a.p75, max: a.max }))} />
       </section>
 
       <section className="bench-card">
-        <h3>Per-market winner heatmap <span className="bench-muted">· avg return per algo; ★ = best on that market</span></h3>
+        <h3>Per-market winner heatmap <span className="bench-muted">· avg return per config; ★ = best on that market</span></h3>
         <div className="bench-scroll">
           <table className="bench-heat">
             <thead>
-              <tr><th>market</th>{order.map((a) => <th key={a}>{a}</th>)}</tr>
+              <tr><th>market</th>{order.map((h) => <th key={h} title={label[h]}>{label[h]}</th>)}</tr>
             </thead>
             <tbody>
               {c.markets.map((mkt) => (
                 <tr key={mkt}>
                   <td className="bench-heat-label">{mkt}</td>
-                  {order.map((a) => {
-                    const v = c.matrix[a]?.[mkt]
+                  {order.map((h) => {
+                    const v = c.matrix[h]?.[mkt]
                     return (
-                      <td key={a} style={{ background: cellColor(v) }}
-                        className={best[mkt] === a ? "win" : ""}>
+                      <td key={h} style={{ background: cellColor(v) }}
+                        className={best[mkt] === h ? "win" : ""}>
                         {v == null ? "" : `${v >= 0 ? "+" : ""}${v.toFixed(2)}`}
-                        {best[mkt] === a ? " ★" : ""}
+                        {best[mkt] === h ? " ★" : ""}
                       </td>
                     )
                   })}

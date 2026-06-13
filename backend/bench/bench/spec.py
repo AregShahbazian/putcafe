@@ -30,13 +30,21 @@ class Spec:
 
     def configs(self) -> list[dict]:
         """Cartesian expansion of the param/pivot grids → concrete configs.
-        Each config = {algo, params{}, pivots{}} with scalar leaves only."""
+        Each config = {algo, params{}, pivots{}} with scalar leaves only.
+        `params.algoParams` is a nested dict, so its list-valued knobs (e.g.
+        `period`) are expanded as additional axes too — that's how indicator
+        algos sweep their own parameters in a benchmark-map."""
         params = _expand(self.param_grid)
         pivots = _expand(self.pivot_grid) or [{}]
         out = []
         for p in params or [{}]:
-            for pv in pivots:
-                out.append({"algo": self.algo, "params": p, "pivots": pv})
+            ap_variants = _expand(p["algoParams"]) if p.get("algoParams") else [None]
+            for ap in ap_variants:
+                pp = dict(p)
+                if ap is not None:
+                    pp["algoParams"] = ap
+                for pv in pivots:
+                    out.append({"algo": self.algo, "params": pp, "pivots": pv})
         return out
 
     def is_map(self) -> bool:

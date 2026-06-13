@@ -1,0 +1,20 @@
+{
+  "algo": "donchian",
+  "params": {
+    "quoteAmount": 100,
+    "leverage": 1,
+    "feesEnabled": true,
+    "startingBalance": 1000,
+    "tpSlRatio": [2, 3],
+    "slCapPct": [4, 6],
+    "algoParams": { "period": [20, 30, 50] }
+  },
+  "pivots": { "enabled": false },
+  "selector": {
+    "exchanges": ["binance", "bybit", "cryptocom", "kucoin", "woo", "htx", "bitvavo"],
+    "bases": ["BTC", "ETH", "SOL", "BNB", "XRP"],
+    "quotes": ["USDT", "USDC", "USD", "EUR"],
+    "resolutions": ["1h"]
+  },
+  "range": { "mode": "random", "n": 10, "minBars": 500, "maxBars": 2000, "seed": 42 }
+}
