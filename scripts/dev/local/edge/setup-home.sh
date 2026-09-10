@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # RUN ON YOUR LAPTOP. Provisions the cross-app "home" portal host (home.<ORION_HOST>) on
 # the shared VPS edge: uploads the home assets, runs the idempotent remote setup, and
-# fetches the rendered page back to ./areg.nl/index.html — the exact file to drop on the
-# areg.nl web root (it links to the same live URLs).
+# fetches the rendered page back to ./portal/index.html (gitignored) — the exact file to
+# drop on the web root of any other static host you own (it links to the same live URLs).
 #
 # Requires the Orion edge to already be provisioned on the box (shared Caddy). Safe to
 # re-run anytime.
@@ -25,11 +25,11 @@ scp_ "$assets/site.caddy" "$assets/setup.sh" "$assets/gen-home-index.sh" \
 log "running remote setup (idempotent)…"
 ssh_ 'bash /root/home/setup.sh'
 
-log "fetching the rendered portal → $here/areg.nl/index.html (upload this to areg.nl)"
-mkdir -p "$here/areg.nl"
-scp_ "$CONN_USER@$CONN_IP:/root/home/site/index.html" "$here/areg.nl/index.html"
+log "fetching the rendered portal → $here/portal/index.html"
+mkdir -p "$here/portal"
+scp_ "$CONN_USER@$CONN_IP:/root/home/site/index.html" "$here/portal/index.html"
 
 host="$(ssh_ "sed -n 's/^ORION_HOST=//p' /root/orion/orion-web.env")"
 log "done."
 log "  VPS portal : https://home.$host/"
-log "  areg.nl    : upload $here/areg.nl/index.html to your web root"
+log "  static host: upload $here/portal/index.html to your own web root (optional)"

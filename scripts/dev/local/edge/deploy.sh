@@ -38,6 +38,6 @@ log "regenerating the root landing page"
 scp_ "$here/../../remote/edge/gen-landing-index.sh" "$CONN_USER@$CONN_IP:/root/putcafe/gen-landing-index.sh"
 ssh_ 'bash /root/putcafe/gen-landing-index.sh /root/putcafe/site'
 
-host="putcafe.${CONN_IP//./-}.sslip.io"
+host="putcafe.$EDGE_HOST"
 [ "$slot" = "prod" ] && url="https://$host/web/" || url="https://$host/web/$slot/"
 log "done → $url  | landing: https://$host/"

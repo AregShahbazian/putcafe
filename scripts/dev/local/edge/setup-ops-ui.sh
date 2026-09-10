@@ -2,7 +2,8 @@
 # RUN ON YOUR LAPTOP. Provisions the VPS ops UI (Dozzle) — one URL to see every
 # container on the box (logs, stats, start/stop/restart) behind a login:
 #
-#   https://ops.<host>/        creds in .secrets/ops-ui.env (generated first run)
+#   https://ops.<host>/        creds in .secrets/ops-ui.env (generated first run;
+#                              user = $OPS_UI_USER or "ops", password random)
 #
 # Re-runs the site edge setup first (idempotent — wires/validates/reloads Caddy
 # with the ops host block), then provisions the dozzle stack. Safe to re-run.
@@ -20,7 +21,7 @@ CREDS_FILE="$here/.secrets/ops-ui.env"
 if [ ! -f "$CREDS_FILE" ]; then
   log "generating ops UI credentials → $CREDS_FILE"
   printf 'OPS_UI_USER=%s\nOPS_UI_PASSWORD=%s\n' \
-    "areg" "$(openssl rand -hex 16)" > "$CREDS_FILE"
+    "${OPS_UI_USER:-ops}" "$(openssl rand -hex 16)" > "$CREDS_FILE"
   chmod 600 "$CREDS_FILE"
 fi
 
@@ -40,7 +41,7 @@ ssh_ 'mv -f /root/putcafe/ops-ui/ops-ui.env /root/putcafe/ops-ui/creds.env && ch
 log "running remote ops-ui setup (idempotent)…"
 ssh_ 'bash /root/putcafe/ops-ui/setup-ops-ui.sh'
 
-host="ops.${CONN_IP//./-}.sslip.io"
+host="ops.$EDGE_HOST"
 log "waiting for https://$host/ …"
 for i in $(seq 1 15); do
   # -L: / 307-redirects to the login page; 200 after following = healthy

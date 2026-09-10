@@ -3,7 +3,9 @@
 # ssh_/scp_/rsync_ helpers. Key-first, safe before first setup:
 #   * .secrets/putcafe_ci + .secrets/vps.env exist -> key auth (no password)
 #   * otherwise -> sshpass + deploy.conf (SERVER_IP/SERVER_USER/SERVER_PASSWORD[/PORT])
-# Sets: CONN_IP CONN_USER CONN_PORT FIRST_RUN KEY_FILE ENV_FILE
+# The public edge host defaults to sslip.io over the VPS IP (<a-b-c-d>.sslip.io);
+# set EDGE_HOST (env, deploy.conf or vps.env) to use a real domain instead.
+# Sets: CONN_IP CONN_USER CONN_PORT EDGE_HOST FIRST_RUN KEY_FILE ENV_FILE
 _here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 die() { printf '\033[1;31m[putcafe-edge] %s\033[0m\n' "$*" >&2; exit 1; }
 
@@ -39,3 +41,6 @@ else
   scp_()   { sshpass -p "$SERVER_PASSWORD" scp "${_COMMON[@]}" -P "$CONN_PORT" "$@"; }
   rsync_() { sshpass -p "$SERVER_PASSWORD" rsync -e "ssh -o StrictHostKeyChecking=accept-new -p $CONN_PORT" "$@"; }
 fi
+
+# Public host the shared edge serves: putcafe.<EDGE_HOST>, ops.<EDGE_HOST>, …
+EDGE_HOST="${EDGE_HOST:-${CONN_IP//./-}.sslip.io}"

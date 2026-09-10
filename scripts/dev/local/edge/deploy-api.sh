@@ -25,7 +25,7 @@ rsync_ -az --delete --exclude node_modules --exclude dist --exclude __pycache__ 
 log "building + starting the stack (docker compose up -d --build)"
 ssh_ 'cd /root/putcafe/api && docker compose up -d --build --remove-orphans'
 
-host="putcafe.${CONN_IP//./-}.sslip.io"
+host="putcafe.$EDGE_HOST"
 log "health checks (public, via Caddy)"
 for i in $(seq 1 15); do
   ok=1

@@ -20,7 +20,7 @@ esac
 source "$here/_conn.sh"
 
 if [ "$cmd" = "health" ]; then
-  host="putcafe.${CONN_IP//./-}.sslip.io"
+  host="putcafe.$EDGE_HOST"
   echo "curling https://$host (public, end-to-end)"
   for p in /web/ /web/staging/; do
     printf '%-15s ' "$p"
@@ -28,7 +28,7 @@ if [ "$cmd" = "health" ]; then
   done
   printf '%-15s ' "ops UI"
   curl -sLo /dev/null -w 'HTTP %{http_code} (login page)\n' --max-time 10 \
-    "https://ops.${CONN_IP//./-}.sslip.io/" || echo "FAILED"
+    "https://ops.$EDGE_HOST/" || echo "FAILED"
   exit 0
 fi
 

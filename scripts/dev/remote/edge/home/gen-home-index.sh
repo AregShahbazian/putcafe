@@ -6,14 +6,14 @@
 # The output is fully self-contained with ABSOLUTE https URLs, so the SAME file works
 # in two places unchanged:
 #   * served by Caddy at  home.<ORION_HOST>      (this box)
-#   * dropped at the web root of any other static host, e.g. areg.nl
+#   * dropped at the web root of any other static host you own
 #
 # Because it only links to the per-app release pages (which each deploy regenerates),
 # this hub never goes stale — there is nothing to re-run on deploy. Re-run it only if
-# ORION_HOST changes (then re-upload the areg.nl copy too).
+# ORION_HOST changes (then re-upload any external copy too).
 #
 #   bash gen-home-index.sh <orion-host> [out-dir]
-#     <orion-host>  e.g. 203-0-113-10.sslip.io   (bare host, no scheme)
+#     <orion-host>  e.g. <ip-with-dashes>.sslip.io or example.com   (bare host, no scheme)
 #     [out-dir]     default /root/home/site        (writes <out-dir>/index.html)
 set -euo pipefail
 HOST="${1:?usage: gen-home-index.sh <orion-host> [out-dir]}"

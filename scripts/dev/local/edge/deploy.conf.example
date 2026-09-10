@@ -6,3 +6,7 @@ SERVER_IP="x.x.x.x"
 SERVER_USER="root"
 SERVER_PASSWORD="..."
 SERVER_SSH_PORT="22"
+# Optional: public host of the edge. Defaults to <ip-with-dashes>.sslip.io, i.e. no
+# DNS needed; set a real domain here (and point putcafe.<domain>, ops.<domain>,
+# home.<domain> at the VPS) to use your own.
+#EDGE_HOST="example.com"

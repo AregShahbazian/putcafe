@@ -7,7 +7,7 @@
 # remote setup.sh in this dir does that idempotently.
 #
 # ORION_HOST comes from /root/orion/orion-web.env via the edge container's env_file, so
-# the host tracks the box automatically: home.203-0-113-10.sslip.io (or a real domain
+# the host tracks the box automatically: home.<ip-with-dashes>.sslip.io (or a real domain
 # later — set ORION_HOST and re-run setup; no edit here).
 home.{$ORION_HOST} {
 	root * /root/home/site

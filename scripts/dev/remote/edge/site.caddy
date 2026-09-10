@@ -1,7 +1,8 @@
 # Putcafe site — imported by /root/orion/Caddyfile (the shared edge Caddy) via
 # `import /root/*/site.caddy` (or a putcafe-specific line added by setup.sh).
 # ORION_HOST comes from /root/orion/orion-web.env via the edge container's env_file,
-# so the host tracks the edge automatically: putcafe.203-0-113-10.sslip.io.
+# so the host tracks the edge automatically: putcafe.<ip-with-dashes>.sslip.io, or
+# putcafe.<your-domain> once ORION_HOST is a real domain.
 #
 #   /web/[<slot>/]    -> web builds (rsynced by ci.yml / deploy.sh)
 #   /api/positions/*  -> positions-backend container (127.0.0.1:8101)
